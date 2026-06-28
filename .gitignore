@@ -1,0 +1,25 @@
+# --- Boot secrets (only keep locally) ---
+.env
+
+# --- SQLite database (user data, config, JWT secret) ---
+data/
+
+# --- Node dependencies ---
+node_modules/
+npm-debug.log*
+yarn-error.log
+pnpm-debug.log*
+
+# --- Build / cache / coverage ---
+.cache/
+dist/
+build/
+coverage/
+
+# --- Editor / OS ---
+.idea/
+.vscode/
+*.swp
+*.swo
+.DS_Store
+Thumbs.db

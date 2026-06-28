@@ -1,0 +1,220 @@
+<!doctype html>
+<html lang="en">
+<head>
+    <meta charset="utf-8" />
+    <meta name="viewport" content="width=device-width, initial-scale=1" />
+    <title>SelfBotMusik · Dashboard</title>
+    <meta name="description" content="SelfBotMusik dashboard — control playback over Lavalink VPS with a modern UI." />
+    <meta name="theme-color" content="#0e0f12" />
+    <link rel="preconnect" href="https://fonts.googleapis.com" />
+    <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin />
+    <link href="https://fonts.googleapis.com/css2?family=Inter:wght@400;500;600;700;800&family=JetBrains+Mono:wght@500&display=swap" rel="stylesheet" />
+    <link rel="stylesheet" href="/style.css" />
+</head>
+<body>
+    <div class="app">
+        <header>
+            <div class="brand">
+                <div class="logo">♪</div>
+                <div class="brand-text">
+                    <div class="brand-title">SelfBotMusik</div>
+                    <div class="brand-sub">Lavalink v4 · Dashboard</div>
+                </div>
+            </div>
+            <div class="header-actions">
+                <span id="statusBadge" class="status-badge" title="Lavalink status">
+                    <span class="status-dot"></span>
+                    <span id="statusText">Connecting…</span>
+                </span>
+                <button id="btnLogout" class="btn btn-icon" type="button" title="Log out"
+                        aria-label="Log out">
+                    <svg viewBox="0 0 24 24" fill="currentColor" width="16" height="16">
+                        <path d="M16 17l-1.41-1.41L18.17 14H8v-2h10.17l-3.58-3.59L16 7l5 5zM4 5h8V3H4c-1.1 0-2 .9-2 2v14c0 1.1.9 2 2 2h8v-2H4V5z"/>
+                    </svg>
+                </button>
+                <button id="btnSettings" class="btn btn-icon" type="button" title="Open Settings" aria-label="Settings">
+                    <svg viewBox="0 0 24 24" fill="currentColor" width="18" height="18">
+                        <path d="M19.14 12.94c.04-.3.06-.61.06-.94 0-.32-.02-.64-.07-.94l2.03-1.58a.49.49 0 00.12-.61l-1.92-3.32a.49.49 0 00-.59-.22l-2.39.96c-.5-.38-1.03-.7-1.62-.94l-.36-2.54a.5.5 0 00-.5-.43h-3.84a.5.5 0 00-.49.42l-.36 2.54c-.59.24-1.13.56-1.62.94l-2.39-.96a.49.49 0 00-.59.22L2.74 8.87a.49.49 0 00.12.61L4.89 11.06c-.04.3-.07.62-.07.94 0 .32.02.64.07.94l-2.03 1.58a.49.49 0 00-.12.61l1.92 3.32c.13.22.39.31.59.22l2.39-.96c.5.38 1.03.7 1.62.94l.36 2.54c.05.24.24.42.5.42h3.84c.26 0 .45-.18.49-.42l.36-2.54c.59-.24 1.13-.56 1.62-.94l2.39.96c.22.09.49 0 .59-.22l1.92-3.32a.49.49 0 00-.12-.61zM12 15.6A3.6 3.6 0 1115.6 12 3.6 3.6 0 0112 15.6z"/>
+                    </svg>
+                </button>
+            </div>
+        </header>
+
+        <!-- NOW PLAYING -->
+        <section class="panel main-panel">
+            <div class="now-playing">
+                <div class="cover-wrap">
+                    <img id="npCover" class="cover" alt="Cover" />
+                </div>
+                <div class="np-meta">
+                    <div id="nowChip" class="now-chip" hidden>Now playing</div>
+                    <div class="np-title" id="npTitle">Nothing playing yet</div>
+                    <div class="np-author" id="npAuthor">—</div>
+                    <div class="np-requester" id="npRequester">requested by: —</div>
+                    <a id="npUri" class="np-uri" target="_blank" rel="noopener" hidden></a>
+                </div>
+            </div>
+
+            <div class="progress">
+                <div class="progress-track">
+                    <div class="progress-fill" id="progressFill"></div>
+                </div>
+                <div class="progress-times">
+                    <span id="curTime">0:00</span>
+                    <span id="totalTime">0:00</span>
+                </div>
+            </div>
+
+            <div class="controls" role="group" aria-label="Playback controls">
+                <button id="btnPause" class="btn btn-icon" type="button" title="Pause / Resume" aria-label="Pause" disabled>
+                    <svg class="ic-pause" viewBox="0 0 24 24" fill="currentColor"><path d="M6 5h4v14H6V5zm8 0h4v14h-4V5z"/></svg>
+                    <svg class="ic-play" viewBox="0 0 24 24" fill="currentColor" style="display:none"><path d="M8 5v14l11-7z"/></svg>
+                </button>
+                <button id="btnSkip" class="btn" type="button" title="Skip to the next track" disabled>
+                    <svg viewBox="0 0 24 24" fill="currentColor" width="18" height="18"><path d="M6 18l8.5-6L6 6v12zM16 6v12h2V6h-2z"/></svg>
+                    <span>Skip</span>
+                </button>
+                <button id="btnStop" class="btn btn-danger" type="button" title="Stop & clear queue">
+                    <svg viewBox="0 0 24 24" fill="currentColor" width="18" height="18"><rect x="6" y="6" width="12" height="12" rx="2"/></svg>
+                    <span>Stop</span>
+                </button>
+                <button id="btnClear" class="btn" type="button" title="Remove all upcoming tracks (keeps the playing one)" disabled>
+                    <svg viewBox="0 0 24 24" fill="currentColor" width="18" height="18"><path d="M6 19c0 1.1.9 2 2 2h8c1.1 0 2-.9 2-2V7H6v12zM19 4h-3.5l-1-1h-5l-1 1H5v2h14V4z"/></svg>
+                    <span>Clear queue</span>
+                </button>
+                <button id="btnLoop" class="btn btn-loop" type="button" title="Repeat: off" data-mode="0" aria-label="Repeat mode">
+                    <svg viewBox="0 0 24 24" fill="currentColor" width="18" height="18"><path d="M7 7h10v3l4-4-4-4v3H5v6h2V7zm10 10H7v-3l-4 4 4 4v-3h12v-6h-2v4z"/></svg>
+                    <span class="loop-label">OFF</span>
+                    <span class="loop-sub">Repeat off</span>
+                </button>
+            </div>
+
+            <div class="volume">
+                <svg width="18" height="18" viewBox="0 0 24 24" fill="currentColor" style="color:var(--text-dim)">
+                    <path d="M3 9v6h4l5 5V4L7 9H3zm13.5 3a4.5 4.5 0 00-2.5-4v8a4.5 4.5 0 002.5-4z"/>
+                </svg>
+                <input id="volume" type="range" min="0" max="200" value="100" aria-label="Volume" />
+                <span id="volumeLabel" class="volume-label">100%</span>
+            </div>
+        </section>
+
+        <!-- SEARCH & QUEUE -->
+        <section class="panel">
+            <div class="panel-title">
+                <h2>Search</h2>
+                <span class="queue-count">Queue: <span id="queueCount">0</span></span>
+            </div>
+
+            <div class="search">
+                <input id="searchInput" type="search" autocomplete="off"
+                       placeholder="Search YouTube, paste a URL…" />
+                <button id="searchSubmit" class="btn" type="button" aria-label="Add to queue">
+                    <svg viewBox="0 0 24 24" fill="currentColor" width="18" height="18"><path d="M19 13h-6v6h-2v-6H5v-2h6V5h2v6h6v2z"/></svg>
+                </button>
+            </div>
+            <div id="searchMsg" class="inline-msg" role="status" aria-live="polite"></div>
+
+            <div class="queue" id="queue"></div>
+            <div id="queueMsg" class="inline-msg" role="status" aria-live="polite"></div>
+        </section>
+
+        <!-- SETTINGS -->
+        <section class="panel settings-panel" id="settingsPanel" hidden>
+            <div class="panel-title">
+                <h2>Settings</h2>
+                <button id="btnCloseSettings" class="btn btn-icon" type="button" aria-label="Close">
+                    <svg viewBox="0 0 24 24" fill="currentColor" width="18" height="18"><path d="M19 6.41L17.59 5 12 10.59 6.41 5 5 6.41 10.59 12 5 17.59 6.41 19 12 13.41 17.59 19 19 17.59 13.41 12z"/></svg>
+                </button>
+            </div>
+
+            <div class="vc-row">
+                <div class="vc-info">
+                    <div class="vc-row-title">Voice connection</div>
+                    <div id="vcStatus" class="vc-status">—</div>
+                </div>
+                <button id="btnConnect" class="btn btn-primary" type="button">Connect</button>
+                <button id="btnDisconnect" class="btn btn-danger" type="button" disabled>Disconnect</button>
+            </div>
+            <div id="vcMsg" class="inline-msg" role="status" aria-live="polite"></div>
+            <p class="settings-help">
+                Disconnect is disabled while a track is playing. Stop the playback first, then disconnect.
+            </p>
+
+            <div class="form-grid">
+                <label class="field">
+                    <span class="field-label">Guild (Server) ID</span>
+                    <input id="cfgGuild" type="text" inputmode="numeric" placeholder="1136002922501648587" />
+                </label>
+                <label class="field">
+                    <span class="field-label">Voice Channel ID</span>
+                    <input id="cfgChannel" type="text" inputmode="numeric" placeholder="1499250327617146960" />
+                </label>
+
+                <label class="field">
+                    <span class="field-label">Lavalink Host</span>
+                    <input id="cfgLavaHost" type="text" placeholder="lavalink.example.com" />
+                </label>
+                <label class="field">
+                    <span class="field-label">Lavalink Port</span>
+                    <input id="cfgLavaPort" type="text" inputmode="numeric" placeholder="443" />
+                </label>
+                <label class="field">
+                    <span class="field-label">Lavalink Password</span>
+                    <input id="cfgLavaPass" type="password" placeholder="password" />
+                </label>
+                <label class="field">
+                    <span class="field-label">Use TLS</span>
+                    <select id="cfgLavaSecure">
+                        <option value="false">False (HTTP/WS)</option>
+                        <option value="true">True (HTTPS/WSS)</option>
+                    </select>
+                </label>
+            </div>
+
+            <div class="settings-actions">
+                <button id="btnSaveSettings" class="btn btn-primary" type="button">Save &amp; reconnect</button>
+                <button id="btnReloadSettings" class="btn" type="button">Reload</button>
+            </div>
+            <div id="settingsMsg" class="inline-msg" role="status" aria-live="polite"></div>
+
+            <p class="settings-help small">
+                "Save &amp; reconnect" persists the values into the SQLite database and recreates the Lavalink connection.
+                The web dashboard will not be restarted.
+            </p>
+
+            <hr class="settings-divider" />
+
+            <div class="pw-section">
+                <div class="pw-title">Change dashboard password</div>
+                <p class="settings-help small">
+                    Enter your current password and a new one. The new password will be required at the next login.
+                </p>
+                <div class="form-grid">
+                    <label class="field">
+                        <span class="field-label">Current password</span>
+                        <input id="pwCurrent" type="password" placeholder="•••••" autocomplete="current-password" />
+                    </label>
+                    <label class="field">
+                        <span class="field-label">New password</span>
+                        <input id="pwNext" type="password" placeholder="at least 4 characters"
+                               minlength="4" maxlength="256" autocomplete="new-password" />
+                    </label>
+                    <label class="field">
+                        <span class="field-label">Confirm new password</span>
+                        <input id="pwConfirm" type="password" placeholder="repeat"
+                               minlength="4" maxlength="256" autocomplete="new-password" />
+                    </label>
+                </div>
+                <div class="settings-actions">
+                    <button id="btnChangePassword" class="btn btn-primary" type="button">Save new password</button>
+                </div>
+                <div id="pwMsg" class="inline-msg" role="status" aria-live="polite"></div>
+            </div>
+        </section>
+    </div>
+
+    <div class="toast-host" id="toastHost"></div>
+
+    <script src="/app.js"></script>
+</body>
+</html>

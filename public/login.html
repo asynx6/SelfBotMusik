@@ -1,0 +1,153 @@
+<!doctype html>
+<html lang="en">
+<head>
+    <meta charset="utf-8" />
+    <meta name="viewport" content="width=device-width, initial-scale=1" />
+    <title>SelfBotMusik · Login</title>
+    <meta name="description" content="Sign in to the SelfBotMusik dashboard." />
+    <meta name="theme-color" content="#0e0f12" />
+    <link rel="preconnect" href="https://fonts.googleapis.com" />
+    <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin />
+    <link href="https://fonts.googleapis.com/css2?family=Inter:wght@400;500;600;700;800&family=JetBrains+Mono:wght@500&display=swap" rel="stylesheet" />
+    <link rel="stylesheet" href="/style.css" />
+    <style>
+        body {
+            margin: 0; min-height: 100vh;
+            display: grid; place-items: center;
+            padding: 24px;
+            background:
+                radial-gradient(circle at 20% 20%, rgba(255,255,255,0.04) 0, transparent 40%),
+                radial-gradient(circle at 80% 70%, rgba(255,255,255,0.025) 0, transparent 40%),
+                var(--bg);
+            font-family: 'Inter', system-ui, -apple-system, sans-serif;
+            color: var(--text);
+        }
+        .login-card {
+            width: min(420px, 100%);
+            background: var(--surface);
+            border: 1px solid var(--border);
+            padding: 36px 32px;
+            border-radius: 18px;
+            box-shadow: 0 30px 80px -20px rgba(0,0,0,0.6);
+        }
+        .login-logo {
+            width: 56px; height: 56px;
+            border-radius: 12px;
+            background: linear-gradient(135deg, #ffffff, #c5c8cf);
+            color: #0e0f12;
+            font-size: 28px; font-weight: 800;
+            display: grid; place-items: center;
+            margin-bottom: 18px;
+        }
+        .login-title { font-size: 22px; font-weight: 700; letter-spacing: -0.2px; }
+        .login-sub { color: var(--text-dim); font-size: 13px; margin-top: 4px; }
+        .login-form { margin-top: 24px; }
+        .login-field { margin-bottom: 14px; }
+        .login-field label {
+            display: block; font-size: 11px; color: var(--text-dim);
+            text-transform: uppercase; letter-spacing: 0.8px; margin-bottom: 6px;
+        }
+        .login-field input {
+            width: 100%; height: 46px; padding: 0 14px;
+            background: var(--surface-2); border: 1px solid var(--border-strong);
+            color: var(--text); border-radius: 10px;
+            font-size: 16px; font-family: inherit; outline: none;
+            transition: border-color 0.2s;
+        }
+        .login-field input:focus { border-color: #8a8d96; }
+        .login-btn {
+            width: 100%; height: 48px;
+            background: #ffffff; color: #0e0f12; border: none;
+            border-radius: 10px; font-size: 15px; font-weight: 700;
+            cursor: pointer; transition: opacity 0.2s; margin-top: 8px;
+        }
+        .login-btn:hover { opacity: 0.9; }
+        .login-btn:disabled { opacity: 0.5; cursor: not-allowed; }
+        .login-error {
+            color: var(--danger); font-size: 13px; margin-top: 12px;
+            min-height: 18px; padding: 10px 14px;
+            background: rgba(239,68,68,0.08);
+            border: 1px solid rgba(239,68,68,0.25);
+            border-radius: 8px;
+            display: none;
+        }
+        .login-error.show { display: block; }
+        .login-help {
+            font-size: 12px; color: var(--text-faint); margin-top: 22px;
+            padding-top: 18px; border-top: 1px solid var(--border); line-height: 1.6;
+        }
+        .login-help code {
+            background: var(--surface-2); padding: 1px 6px; border-radius: 4px;
+            color: #c8cbd1; font-family: 'JetBrains Mono', monospace;
+        }
+    </style>
+</head>
+<body>
+    <div class="login-card">
+        <div class="login-logo">♪</div>
+        <div class="login-title">SelfBotMusik</div>
+        <div class="login-sub">Sign in to your dashboard</div>
+
+        <form class="login-form" id="loginForm" autocomplete="off">
+            <div class="login-field">
+                <label for="password">Password</label>
+                <input id="password" name="password" type="password" required autofocus
+                       minlength="4" maxlength="256" autocomplete="current-password"
+                       placeholder="Enter password" />
+            </div>
+            <button type="submit" class="login-btn" id="btnLogin">Sign in</button>
+            <div class="login-error" id="errBox" role="alert"></div>
+        </form>
+
+        <div class="login-help">
+            Default password: <code>changeme</code><br />
+            Change it in Settings → Change Password right after the first login.
+        </div>
+    </div>
+
+    <script>
+        const form = document.getElementById("loginForm");
+        const pw = document.getElementById("password");
+        const btn = document.getElementById("btnLogin");
+        const err = document.getElementById("errBox");
+
+        function showError(msg) {
+            err.textContent = msg;
+            err.classList.add("show");
+        }
+        function hideError() {
+            err.textContent = "";
+            err.classList.remove("show");
+        }
+
+        form.addEventListener("submit", async (e) => {
+            e.preventDefault();
+            hideError();
+            btn.disabled = true;
+            btn.textContent = "Verifying…";
+            try {
+                const r = await fetch("/api/auth/login", {
+                    method: "POST",
+                    headers: { "Content-Type": "application/json" },
+                    body: JSON.stringify({ password: pw.value }),
+                });
+                const data = await r.json().catch(() => ({}));
+                if (!r.ok) {
+                    showError(data.error || `Server error (HTTP ${r.status})`);
+                    btn.disabled = false;
+                    btn.textContent = "Sign in";
+                    pw.focus();
+                    pw.select();
+                    return;
+                }
+                btn.textContent = "Success ✓";
+                setTimeout(() => { window.location.assign("/"); }, 250);
+            } catch (e) {
+                showError("Network error: " + e.message);
+                btn.disabled = false;
+                btn.textContent = "Sign in";
+            }
+        });
+    </script>
+</body>
+</html>

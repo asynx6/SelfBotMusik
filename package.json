@@ -1,0 +1,42 @@
+{
+    "name": "selfbotmusik",
+    "version": "2.0.0",
+    "description": "Discord music selfbot with Lavalink + a secure SQLite-backed web dashboard.",
+    "main": "index.js",
+    "scripts": {
+        "start": "node index.js",
+        "dev": "node index.js",
+        "test": "echo \"Error: no test specified\" && exit 1"
+    },
+    "keywords": [
+        "discord",
+        "selfbot",
+        "lavalink",
+        "poru",
+        "music",
+        "dashboard",
+        "sqlite"
+    ],
+    "author": "",
+    "license": "MIT",
+    "dependencies": {
+        "@discordjs/voice": "^0.19.2",
+        "@distube/ytdl-core": "^4.16.12",
+        "bcryptjs": "^3.0.3",
+        "better-sqlite3": "^12.11.1",
+        "cookie-parser": "^1.4.7",
+        "discord-ytdl-core": "^5.0.4",
+        "discord.js-selfbot-v13": "^3.7.1",
+        "dotenv": "^17.4.2",
+        "express": "^5.2.1",
+        "ffmpeg-static": "^5.3.0",
+        "jsonwebtoken": "^9.0.3",
+        "node-fetch": "^2.7.0",
+        "opusscript": "^0.0.8",
+        "poru": "^5.3.0",
+        "shoukaku": "^4.3.0",
+        "sodium-native": "^5.1.0",
+        "tweetnacl": "^1.0.3",
+        "ws": "^8.21.0"
+    }
+}
