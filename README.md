@@ -46,8 +46,8 @@ your own Lavalink v4 server and exposes a sleek web dashboard for control.
 ## Setup
 
 ```bash
-git clone <repo>
-cd <repo>
+git clone https://github.com/asynx6/SelfBotMusik.git
+cd SelfBotMusik
 npm install
 cp .env.example .env        # add your Discord user token
 node index.js
@@ -99,4 +99,4 @@ WEB_PORT=3434
 
 ## License
 
-MIT — for personal/private hobby use only.
+MIT — [License](LICENSE)
