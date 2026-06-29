@@ -8,7 +8,8 @@ function createClient() {
 }
 
 // Re-bind safety events: voice state drops, guild/channel deletion, shard
-// reconnects. ctx exposes: State, patch(), tryReconnectVC(), resetReconnects().
+// reconnects. ctx exposes: State, patch(), tryReconnectVC(), resetReconnects(),
+// intentionalDisconnect.
 // We deliberately use runtimeMod.Runtime (always-current) instead of a
 // snapshot at wire-time — Settings changes are reflected immediately.
 function wireSafetyEvents(client, ctx) {
@@ -20,7 +21,12 @@ function wireSafetyEvents(client, ctx) {
             if (wasConn && !isConn) {
                 console.warn(`⚠️  Bot dropped out of VC (was: ${oldState.channelId})`);
                 ctx.patch({ voiceConnected: false });
-                ctx.tryReconnectVC("voice state dropped");
+                if (ctx.intentionalDisconnect) {
+                    ctx.intentionalDisconnect = false;
+                    console.log("ℹ️  Intentional disconnect — skipping auto-rejoin");
+                } else if (typeof ctx.tryReconnectVC === "function") {
+                    ctx.tryReconnectVC("voice state dropped");
+                }
             } else if (isConn) {
                 ctx.patch({ voiceConnected: true });
                 ctx.resetReconnects();

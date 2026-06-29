@@ -240,13 +240,16 @@ function probePermissions(guildId, channelId) {
     return { guild, channel, me };
 }
 
-async function leaveVC(force = false) {
+let intentionalDisconnect = false;
+
+async function leaveVC(force = false, intentional = false) {
     const rt = RuntimeSnapshot();
     const player = poru.players.get(rt.guildId);
     const isPlaying = !!(stateMod.State.playing && stateMod.State.playing.encoded);
     if (!force && isPlaying) {
         throw new Error("A track is playing — Stop first before disconnecting (use force=true to override)");
     }
+    if (intentional) intentionalDisconnect = true;
     if (player) {
         try { player.queue.length = 0; } catch {}
         try { await player.stop(); } catch {}
@@ -294,8 +297,12 @@ const ctx = {
     tryReconnectVC,
     resetReconnects,
     joinVC,
-    leaveVC,
+    leaveVC: (force) => leaveVC(force, true),
+    internalLeaveVC: (force) => leaveVC(force, false),
     probePermissions,
+    intentionalDisconnect: false,
+    set intentionalDisconnect(v) { intentionalDisconnect = v; },
+    get intentionalDisconnect() { return intentionalDisconnect; },
     syncStateFromPlayer,
     getPlayer: () => { try { return poru.players.get(RuntimeSnapshot().guildId) || null; } catch { return null; } },
     enqueue: (q, r) => playerMod.enqueue(poru, q, r, ensurePoru, joinVC, runtimeMod.Runtime),
