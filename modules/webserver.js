@@ -19,16 +19,76 @@ function buildServer(ctx) {
     app.use(express.json());
     app.use(cookieParser());
 
-    // Broadcast to all WS clients when state changes.
-    function broadcast(seq) {
+    // Send a snapshot to all WS clients. The browser only redraws when
+    // the payload changes — we don't need to log every heartbeat.
+    function push(tag = "update") {
+        const payload = JSON.stringify({ type: "state", tag, data: stateMod.snapshot() });
         let count = 0;
         if (!ctx.wss) return 0;
         for (const c of ctx.wss.clients) {
             if (c.readyState === 1) {
-                try { c.send(JSON.stringify({ type: "state", seq, data: stateMod.snapshot() })); count++; } catch {}
+                try { c.send(payload); count++; } catch {}
             }
         }
         return count;
+    }
+    // Throttle noisy reconnect / error loops. After a "bad" change
+    // (lastError/connected drop) we suppress logs entirely for 5 s —
+    // operator can still see the very first event for that burst.
+    let suppressUntil = 0;
+    let burstCount = 0;
+    let burstFirst = "";
+    function logIfWorth(sent, kind, fields = []) {
+        if (sent <= 0) return;
+        const now = Date.now();
+        const isBad = kind === "change" && fields.some((k) =>
+            k === "lastError" || k === "connected" || k === "voiceConnected"
+        );
+        if (isBad) {
+            if (now < suppressUntil) {
+                burstCount++;
+                return;
+            }
+            if (burstCount > 0) {
+                console.log(`📡 (${burstCount} more update${burstCount === 1 ? "" : "s"} suppressed — reconnect storm)`);
+                burstCount = 0;
+            }
+            console.log(`📡 Broadcast → ${sent} client${sent === 1 ? "" : "s"} (${fields.join(", ") || "change"})`);
+            suppressUntil = now + 5000;
+            return;
+        }
+        if (kind !== "tick") {
+            console.log(`📡 Broadcast → ${sent} client${sent === 1 ? "" : "s"} (${kind})`);
+        }
+    }
+
+    function diffFields(prev, next) {
+        const out = [];
+        const keys = new Set([...Object.keys(prev), ...Object.keys(next)]);
+        for (const k of keys) {
+            if (JSON.stringify(prev[k]) !== JSON.stringify(next[k])) out.push(k);
+        }
+        return out;
+    }
+    let prevSnap = stateMod.snapshot();
+    // Coalesce successive change events: only one broadcast + log per
+    // 150 ms — even if Poru replays multiple patches in that window.
+    let pending = null;
+    let fieldBag = new Set();
+    let pendingSent = 0;
+    function onChange() {
+        const nextSnap = stateMod.snapshot();
+        for (const k of diffFields(prevSnap, nextSnap)) fieldBag.add(k);
+        prevSnap = nextSnap;
+        pendingSent += push("change"); // still push live, just don't log spam
+        if (pending) return;
+        pending = setTimeout(() => {
+            const fields = [...fieldBag];
+            fieldBag = new Set();
+            pending = null;
+            const sent = pendingSent; pendingSent = 0;
+            logIfWorth(sent, "change", fields);
+        }, 150);
     }
 
     // --- Auth gate: all /api/* except /api/auth/* need a valid JWT cookie. ---
@@ -55,10 +115,11 @@ function buildServer(ctx) {
         const rt = ctx.RuntimeSnapshot();
         const needsSetup = !rt.lavaHost || !rt.lavaPass
             || !rt.guildId || !rt.channelId;
+        const verified = auth.verifyToken(req);
         if (req.query.whoami === "1") {
-            return res.json({ authed: auth.verifyToken(req), role: auth.verifyToken(req) ? "admin" : null });
+            return res.json({ authed: verified, role: verified ? "admin" : null });
         }
-        res.json({ authed: auth.verifyToken(req), needsSetup });
+        res.json({ authed: verified, needsSetup });
     });
 
     app.post("/api/auth/login", (req, res) => {
@@ -119,22 +180,27 @@ function buildServer(ctx) {
             if (!stateMod.State.botReady) return res.status(503).json({ error: "Discord bot is not ready" });
             const rt = ctx.RuntimeSnapshot();
             if (!rt.guildId || !rt.channelId) {
-                return res.status(400).json({ error: "Set Guild + Voice Channel in Settings first" });
+                return res.status(400).json({ error: "Set Guild + Voice Channel in Settings first", code: "MISSING_IDS" });
             }
+            // SAFETY: confirm guild + channel + permissions BEFORE joining.
+            try { await ctx.probePermissions(rt.guildId, rt.channelId); }
+            catch (e) { return res.status(400).json({ error: e.message, code: e.code || "PROBE" }); }
             try { await ctx.ensurePoru(); } catch (e) {
-                return res.status(400).json({ error: e.message });
+                return res.status(400).json({ error: e.message, code: e.code || "LAVA" });
             }
             const t0 = Date.now();
             while (!stateMod.State.connected && Date.now() - t0 < 15000) {
                 await new Promise((r) => setTimeout(r, 200));
             }
             if (!stateMod.State.connected) return res.status(503).json({ error: "Lavalink did not connect (15s timeout)" });
+            // The user wants: connect VC even if there's nothing playing yet.
+            // joinVC itself is non-throwing except on permission errors.
             await ctx.joinVC(rt.guildId, rt.channelId);
             console.log(`🔌 Manual connect → guild=${rt.guildId} channel=${rt.channelId}`);
-            res.json({ ok: true });
+            res.json({ ok: true, guildId: rt.guildId, channelId: rt.channelId, voiceConnected: true });
         } catch (e) {
             console.error("api/connect:", e);
-            res.status(500).json({ error: e.message });
+            res.status(500).json({ error: e.message, code: e.code || "JOIN" });
         }
     });
 
@@ -217,18 +283,16 @@ function buildServer(ctx) {
     const server = http.createServer(app);
     const wss = new WebSocketServer({ server });
     ctx.wss = wss;
-    let seq = 0;
-
+    // (Removed unused seq counter — the WebSocket payload already carries 'tag'.)
     wss.on("connection", (ws) => {
         console.log("🔌 Dashboard connected");
-        try { ws.send(JSON.stringify({ type: "state", seq: ++seq, data: stateMod.snapshot() })); } catch {}
+        try { ws.send(JSON.stringify({ type: "state", tag: "init", data: stateMod.snapshot() })); } catch {}
     });
 
-    // Heartbeat: every state change (and each WS tick) we re-broadcast.
-    stateMod.emitter.on("changed", () => {
-        const sent = broadcast(++seq);
-        if (sent > 0) console.log(`📡 Broadcast → ${sent} client${sent === 1 ? "" : "s"}`);
-    });
+    // Real state changes (play, stop, queue ops, etc.) — log once per change.
+    stateMod.emitter.on("change", onChange);
+    // Tick updates from the 500ms position ticker — silent (no log spam).
+    stateMod.emitter.on("tick", () => push("tick"));
 
     return { app, server };
 }

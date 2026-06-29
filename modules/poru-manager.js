@@ -15,10 +15,14 @@ function createPoru(discordClient) {
 }
 
 // Wire connection-state listeners onto the poru instance; updates State.
-function wirePoruEvents(poru, stateMod) {
+// Accept a patch function directly (safer than wrapping the object).
+function wirePoruEvents(poru, patch) {
+    if (typeof patch !== "function") return;
     poru.on("nodeConnect", (node) => {
         console.log(`🛰️  Node [${node.name}] connected`);
-        stateMod.patch({ connected: true, lastError: null });
+        try { patch({ connected: true, lastError: null }); } catch (e) {
+            console.error("nodeConnect patch:", e.message);
+        }
     });
 
     poru.on("nodeDisconnect", (node, reason) => {
@@ -28,7 +32,7 @@ function wirePoruEvents(poru, stateMod) {
         if (reason && typeof reason === "object") {
             console.warn(`   reason: ${JSON.stringify(reason).slice(0, 200)}`);
         }
-        stateMod.patch({ connected: false });
+        try { patch({ connected: false }); } catch {}
         if (code === 4000) {
             console.error("❌ Lavalink rate-limit (4000). Pause and retry later.");
             try { poru.removeNode(node.name); } catch {}
@@ -36,8 +40,9 @@ function wirePoruEvents(poru, stateMod) {
     });
 
     poru.on("nodeError", (node, err) => {
-        console.error(`❌ Node [${node.name}] error:`, err?.message || err);
-        stateMod.patch({ lastError: String(err?.message || err) });
+        const msg = err?.message || String(err || "");
+        console.error(`❌ Node [${node.name}] error: ${msg.slice(0, 240)}`);
+        try { patch({ lastError: msg.slice(0, 240) }); } catch {}
     });
 }
 

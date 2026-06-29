@@ -1,13 +1,16 @@
 "use strict";
 
 const { Client } = require("discord.js-selfbot-v13");
+const runtimeMod = require("./runtime");
 
 function createClient() {
     return new Client({ checkUpdate: false });
 }
 
-// Re-bind safety events: voice state drops, guild/channel deletion, shard reconnects.
-// ctx exposes: tryReconnectVC(), State.voiceConnected updates.
+// Re-bind safety events: voice state drops, guild/channel deletion, shard
+// reconnects. ctx exposes: State, patch(), tryReconnectVC(), resetReconnects().
+// We deliberately use runtimeMod.Runtime (always-current) instead of a
+// snapshot at wire-time — Settings changes are reflected immediately.
 function wireSafetyEvents(client, ctx) {
     // Voice state changed for the bot.
     client.on("voiceStateUpdate", (oldState, newState) => {
@@ -26,7 +29,8 @@ function wireSafetyEvents(client, ctx) {
     });
 
     client.on("channelDelete", (channel) => {
-        if (channel.id === ctx.channelId) {
+        const current = runtimeMod.Runtime.channelId;
+        if (channel.id === current) {
             console.warn(`⚠️  Voice channel ${channel.name} deleted`);
             ctx.patch({ voiceConnected: false, lastError: "Voice channel deleted" });
             ctx.tryReconnectVC("channel deleted");
@@ -34,7 +38,8 @@ function wireSafetyEvents(client, ctx) {
     });
 
     client.on("guildDelete", (guild) => {
-        if (guild.id === ctx.guildId) {
+        const current = runtimeMod.Runtime.guildId;
+        if (guild.id === current) {
             console.warn(`⚠️  Bot removed from guild ${guild.name}`);
             ctx.patch({
                 botReady: false,
@@ -43,6 +48,7 @@ function wireSafetyEvents(client, ctx) {
                 playing: null,
                 queue: [],
             });
+            try { ctx.tryReconnectVC("guild deleted"); } catch {}
         }
     });
 

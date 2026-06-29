@@ -401,7 +401,12 @@
             els.cfgChannel.value = r.channelId || "";
             els.cfgLavaHost.value = r.lavaHost || "";
             els.cfgLavaPort.value = r.lavaPort || "";
+            // Password field never shows the saved value. If one is saved, the
+            // placeholder becomes a masked hint. Empty placeholder otherwise.
             els.cfgLavaPass.value = "";
+            els.cfgLavaPass.placeholder = r.hasLavaPass
+                ? "•".repeat(Math.max(8, ((r.lavaPass && r.lavaPass.length) || 12)))
+                : "password";
             els.cfgLavaSecure.value = String(!!r.lavaSecure);
         } catch (e) { setMsg(els.settingsMsg, "err", "Could not load config: " + e.message); }
     }

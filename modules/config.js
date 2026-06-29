@@ -45,7 +45,11 @@ function publicConfig(rt) {
         channelId: rt.channelId,
         lavaHost: rt.lavaHost,
         lavaPort: rt.lavaPort,
-        lavaPass: maskConfigString(rt.lavaPass || "", 0),
+        // We never expose the real password over the API. The frontend shows a
+        // masked placeholder if a password has been saved. Frontend uses
+        // hasLavaPass to decide whether to render that placeholder.
+        lavaPass: "", // explicitly blank
+        hasLavaPass: !!rt.lavaPass,
         lavaSecure: rt.lavaSecure,
     };
 }

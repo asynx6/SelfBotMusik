@@ -11,11 +11,16 @@ function snapshot() {
 }
 
 async function applyRuntimeConfig(patch, ctx) {
-    // ctx exposes:
-    //   - ensurePoru(): throw if Lavalink creds missing
-    //   - leaveVC(force), joinVC(guildId, channelId)
-    //   - stopAll(), getPlayer(), removePoruNode()
+    // ctx exposes (all required by runtime.js):
+    //   - ensurePoru(), markPoruDirty(), removePoruNode()
+    //   - leaveVC(force), joinVC(guildId, channelId), getPlayer()
+    //   - stopAll() — clear queue + stop player, used before node cycles
+    //   - State, patch()
     const allowed = ["guildId", "channelId", "lavaHost", "lavaPort", "lavaPass", "lavaSecure"];
+    const chk = async () => {
+        const p = ctx.getPlayer?.();
+        if (p && typeof ctx.stopAll === "function") { try { await ctx.stopAll(false); } catch {} }
+    };
     const changed = {};
     let touched = false;
     for (const k of allowed) {
@@ -46,8 +51,7 @@ async function applyRuntimeConfig(patch, ctx) {
 
         // If Lavalink host/pass cleared → tear everything down.
         if (!Runtime.lavaHost || !Runtime.lavaPass) {
-            const p = ctx.getPlayer();
-            if (p) { try { await ctx.stopAll(); } catch {} }
+            await chk();
             try { await ctx.removePoruNode(); } catch {}
             try { await ctx.leaveVC(true); } catch {}
             stateMod.patch({ voiceConnected: false, lastError: null });
@@ -69,8 +73,8 @@ async function applyRuntimeConfig(patch, ctx) {
 
         // Lavalink config changed: cycle the node.
         ctx.markPoruDirty();
-        const p = ctx.getPlayer();
-        if (p) { try { await ctx.stopAll(); } catch {} }
+        const p = ctx.getPlayer?.();
+        if (p) { await chk(); }
         try {
             await ctx.ensurePoru();
         } catch (e) {

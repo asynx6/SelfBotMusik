@@ -23,16 +23,17 @@ emitter.setMaxListeners(0);
 
 function patch(partial) {
     Object.assign(State, partial);
-    emitter.emit("changed", State);
+    emitter.emit("change", State);
 }
 
-function defineResetPath(getPlayer, syncFromPlayer) {
-    // The 500 ms position ticker refreshes time without going through Poru again.
-    return function refreshPosition() {
-        const p = getPlayer();
-        if (!p) return;
-        State.position = p.position || 0;
-    };
+// The 500 ms position ticker: only update if changed since last tick.
+function tick(getPlayer) {
+    const p = getPlayer?.();
+    if (!p) return;
+    const next = p.position || 0;
+    if (Math.abs(State.position - next) < 250) return; // suppress duplicate ticks
+    State.position = next;
+    emitter.emit("tick", State);
 }
 
 function snapshot() {
@@ -43,7 +44,7 @@ function snapshot() {
 module.exports = {
     State,
     patch,
+    tick,
     snapshot,
     emitter,
-    defineResetPath,
 };

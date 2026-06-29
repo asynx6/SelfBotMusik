@@ -7,23 +7,24 @@ const LOOP_LABELS = ["OFF", "TRACK", "QUEUE"];
 const LOOP_PORTU = ["NONE", "TRACK", "QUEUE"];
 
 function getLoop() { return stateMod.State.loop || 0; }
-async function cycleLoop() {
+
+async function cycleLoop(poru, Runtime) {
     const next = (getLoop() + 1) % 3;
     stateMod.patch({ loop: next });
-    const p = getPlayer();
+    const p = getPlayer(poru, Runtime);
     if (p) {
         try { p.setLoop(LOOP_PORTU[next]); } catch {}
     }
     return { mode: next, label: LOOP_LABELS[next] };
 }
 
-async function setLoop(mode) {
+async function setLoop(poru, Runtime, mode) {
     const idx = Number(mode);
     if (!Number.isInteger(idx) || idx < 0 || idx > 2) {
         throw new Error("Invalid loop mode (0..2)");
     }
     stateMod.patch({ loop: idx });
-    const p = getPlayer();
+    const p = getPlayer(poru, Runtime);
     if (p) {
         try { p.setLoop(LOOP_PORTU[idx]); } catch {}
     }
@@ -99,8 +100,16 @@ async function skipTrack(poru, Runtime) {
     const p = poru.players.get(Runtime.guildId);
     if (!p) throw new Error("No active player");
     if (!p.currentTrack) throw new Error("Nothing is playing");
+    const hadMore = (p.queue?.length || 0) > 0;
     await p.skip();
-    return { ok: true, remaining: (p.queue?.length || 0) };
+    // If queue is empty after skip, the player would loop on nothing. Force-stop
+    // so position + state clear out cleanly.
+    if (!hadMore) {
+        try { await p.stop(); } catch {}
+        stateMod.patch({ playing: null, paused: false, position: 0 });
+        return { ok: true, remaining: 0, ended: true };
+    }
+    return { ok: true, remaining: p.queue?.length || 0, ended: false };
 }
 
 async function stopAll(poru, Runtime) {

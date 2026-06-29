@@ -62,6 +62,9 @@ function pruneAttempts() {
     db.db.prepare("DELETE FROM login_attempts WHERE ts < ?").run(cutoff);
 }
 
+// Periodic prune. Old attempts bloat DB and slow down attemptsAllowed().
+setInterval(pruneAttempts, 60 * 60 * 1000).unref();
+
 // ---- Token issue/verify ----
 function issueToken(res) {
     const token = jwt.sign({ sub: "admin", role: "admin", ts: Date.now() }, JWT_SECRET, {
