@@ -50,7 +50,7 @@ async function searchTracks(poru, query, requester) {
     }
     if (res.loadType === "track") return [res.tracks[0]];
     if (res.loadType === "search") return [res.tracks[0]];
-    if (res.loadType === "playlist") return [res.tracks[0]];
+    if (res.loadType === "playlist") return res.tracks;
     return [];
 }
 
@@ -60,9 +60,13 @@ async function enqueue(poru, query, requester, ensurePoru, joinVC, Runtime) {
     const tracks = await searchTracks(poru, query, requester);
     if (!tracks.length) throw new Error("No results from Lavalink");
 
-    const t = tracks[0];
-    if (t && typeof t === "object" && "info" in t) t.requester = requester;
-    const info = t.info || {};
+    // Attach requester to all tracks.
+    for (const tr of tracks) {
+        if (tr && typeof tr === "object" && "info" in tr) tr.requester = requester;
+    }
+    const firstTrack = tracks[0];
+    const firstInfo = firstTrack?.info || {};
+    const isBatch = tracks.length > 1;
 
     if (!Runtime.guildId || !Runtime.channelId) {
         throw new Error("Set Guild ID & Voice Channel first (Settings → Connect)");
@@ -76,23 +80,31 @@ async function enqueue(poru, query, requester, ensurePoru, joinVC, Runtime) {
 
     const hadAnythingPlaying = !!(p2.currentTrack || (p2.queue && p2.queue.length > 0));
     if (!hadAnythingPlaying) {
-        p2.queue.add(t);
+        // First track: start it directly. Remaining go to queue.
+        p2.queue.add(firstTrack);
         try { await p2.play(); } catch (e) { console.error("enqueue play() failed:", e.message); }
+        // If batch (playlist), queue the rest.
+        for (let i = 1; i < tracks.length; i++) {
+            p2.queue.add(tracks[i]);
+        }
     } else {
-        p2.queue.add(t);
+        for (const tr of tracks) {
+            p2.queue.add(tr);
+        }
     }
 
     return {
-        title: info.title || "Unknown",
-        author: info.author || "Unknown",
-        duration: info.length || 0,
-        uri: info.uri || "",
-        thumbnail: info.artworkUrl || (info.identifier ? `https://i.ytimg.com/vi/${info.identifier}/hqdefault.jpg` : ""),
-        encoded: t.track || "",
+        title: firstInfo.title || "Unknown",
+        author: firstInfo.author || "Unknown",
+        duration: firstInfo.length || 0,
+        uri: firstInfo.uri || "",
+        thumbnail: firstInfo.artworkUrl || (firstInfo.identifier ? `https://i.ytimg.com/vi/${firstInfo.identifier}/hqdefault.jpg` : ""),
+        encoded: firstTrack?.track || "",
         requester,
         queued: hadAnythingPlaying,
-        queuePosition: hadAnythingPlaying ? (p2.queue.length - 1) : 0,
+        queuePosition: hadAnythingPlaying ? (p2.queue.length - tracks.length) : 0,
         playing: !hadAnythingPlaying,
+        batch: isBatch ? tracks.length : undefined,
     };
 }
 
@@ -106,9 +118,14 @@ async function skipTrack(poru, Runtime) {
     // so position + state clear out cleanly.
     if (!hadMore) {
         try { await p.stop(); } catch {}
-        stateMod.patch({ playing: null, paused: false, position: 0 });
+        stateMod.patch({ playing: null, queue: [], paused: false, position: 0 });
         return { ok: true, remaining: 0, ended: true };
     }
+    // Sync state from player — the now-playing track has changed.
+    const queue = [];
+    if (p.currentTrack) queue.push(serializeTrack(p.currentTrack, Runtime, true));
+    if (Array.isArray(p.queue)) for (const t of p.queue) queue.push(serializeTrack(t, Runtime, false));
+    stateMod.patch({ playing: queue[0] || null, queue, paused: false, position: 0 });
     return { ok: true, remaining: p.queue?.length || 0, ended: false };
 }
 

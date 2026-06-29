@@ -176,7 +176,9 @@ function probePermissions(guildId, channelId) {
     // Try to fetch from cache or REST. discord.js-selfbot caches commonly.
     let guild = client.guilds.cache.get(guildId);
     if (!guild) {
-        try { guild = client.guilds.resolve(guildId); } catch {}
+        try { guild = client.guilds.resolve(guildId); } catch (e) {
+            console.warn(`guild.resolve(${guildId}) failed:`, e.message);
+        }
     }
     if (!guild) {
         const e = new Error(`Bot is not in server with ID "${guildId}" — invite the account first`);
@@ -186,13 +188,37 @@ function probePermissions(guildId, channelId) {
     const me = guild.members?.cache?.get?.(client.user.id) || guild.members?.me;
     if (me && me.voice && me.voice.channelId && me.voice.channelId === channelId) {
         // Already in this channel — fine.
-    } else if (me && me.permissions && typeof me.permissions.has === "function") {
-        // Voice permission flag for selfbots = CONNECT + SPEAK.
-        if (!me.permissions.has(["CONNECT", "VIEW_CHANNEL"])) {
+    } else if (me) {
+        // Permission check: selfbot-v13 permissions may behave differently than
+        // regular discord.js. We check CONNECT only (VIEW_CHANNEL is implicit
+        // for selfbots). Admin bypass: if the user has ADMINISTRATOR, skip check.
+        let canConnect = true;
+        try {
+            if (me.permissions && typeof me.permissions.has === "function") {
+                if (me.permissions.has("ADMINISTRATOR")) {
+                    console.log(`[probe] Admin bypass for guild ${guild.name}`);
+                } else {
+                    // Check CONNECT only — selfbots always have VIEW_CHANNEL
+                    // where they're a member, and has(array) is unreliable.
+                    canConnect = me.permissions.has("CONNECT");
+                }
+            }
+            // If permissions object doesn't exist or has() isn't a function,
+            // allow through — selfbots usually have the needed perms when
+            // they're in a guild. The actual join attempt will surface errors.
+        } catch (permErr) {
+            // If the permissions check itself throws, allow through — the
+            // real error will surface during voice connection.
+            console.warn(`[probe] Permissions check threw (allowing through): ${permErr.message}`);
+        }
+        if (!canConnect) {
+            console.warn(`[probe] No CONNECT permission in guild "${guild.name}"`);
             const e = new Error(`Missing permission to join a voice channel in "${guild.name}"`);
             e.code = "NO_PERMISSION";
             return Promise.reject(e);
         }
+    } else {
+        console.warn(`[probe] Could not resolve self-member in guild "${guild.name}" — allowing through`);
     }
     let channel = guild.channels.cache.get(channelId);
     if (!channel) {

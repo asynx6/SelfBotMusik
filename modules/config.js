@@ -21,7 +21,7 @@ function loadRuntime() {
 // Save a partial Runtime patch to the settings table.
 function saveRuntime(patch) {
     for (const [k, v] of Object.entries(patch || {})) {
-        if (v === undefined || v === null || v === "") continue;
+        if (v === undefined || v === null) continue;
         const key = runtimeToSettingKey(k);
         if (key) db.setSetting(key, v);
     }

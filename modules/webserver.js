@@ -32,63 +32,12 @@ function buildServer(ctx) {
         }
         return count;
     }
-    // Throttle noisy reconnect / error loops. After a "bad" change
-    // (lastError/connected drop) we suppress logs entirely for 5 s —
-    // operator can still see the very first event for that burst.
-    let suppressUntil = 0;
-    let burstCount = 0;
-    let burstFirst = "";
-    function logIfWorth(sent, kind, fields = []) {
-        if (sent <= 0) return;
-        const now = Date.now();
-        const isBad = kind === "change" && fields.some((k) =>
-            k === "lastError" || k === "connected" || k === "voiceConnected"
-        );
-        if (isBad) {
-            if (now < suppressUntil) {
-                burstCount++;
-                return;
-            }
-            if (burstCount > 0) {
-                console.log(`📡 (${burstCount} more update${burstCount === 1 ? "" : "s"} suppressed — reconnect storm)`);
-                burstCount = 0;
-            }
-            console.log(`📡 Broadcast → ${sent} client${sent === 1 ? "" : "s"} (${fields.join(", ") || "change"})`);
-            suppressUntil = now + 5000;
-            return;
-        }
-        if (kind !== "tick") {
-            console.log(`📡 Broadcast → ${sent} client${sent === 1 ? "" : "s"} (${kind})`);
-        }
-    }
-
-    function diffFields(prev, next) {
-        const out = [];
-        const keys = new Set([...Object.keys(prev), ...Object.keys(next)]);
-        for (const k of keys) {
-            if (JSON.stringify(prev[k]) !== JSON.stringify(next[k])) out.push(k);
-        }
-        return out;
-    }
-    let prevSnap = stateMod.snapshot();
-    // Coalesce successive change events: only one broadcast + log per
-    // 150 ms — even if Poru replays multiple patches in that window.
+    // Coalesce successive change events into one push per 150 ms.
     let pending = null;
-    let fieldBag = new Set();
-    let pendingSent = 0;
     function onChange() {
-        const nextSnap = stateMod.snapshot();
-        for (const k of diffFields(prevSnap, nextSnap)) fieldBag.add(k);
-        prevSnap = nextSnap;
-        pendingSent += push("change"); // still push live, just don't log spam
+        push("change");
         if (pending) return;
-        pending = setTimeout(() => {
-            const fields = [...fieldBag];
-            fieldBag = new Set();
-            pending = null;
-            const sent = pendingSent; pendingSent = 0;
-            logIfWorth(sent, "change", fields);
-        }, 150);
+        pending = setTimeout(() => { pending = null; }, 150);
     }
 
     // --- Auth gate: all /api/* except /api/auth/* need a valid JWT cookie. ---
@@ -105,7 +54,8 @@ function buildServer(ctx) {
     });
 
     // --- Login + static files serving. ---
-    app.get("/login", (_req, res) => {
+    app.get("/login", (req, res) => {
+        if (auth.verifyToken(req)) return res.redirect("/");
         res.sendFile(path.join(__dirname, "..", "public", "login.html"));
     });
     app.use(express.static(path.join(__dirname, "..", "public")));

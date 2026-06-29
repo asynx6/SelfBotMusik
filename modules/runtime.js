@@ -26,7 +26,7 @@ async function applyRuntimeConfig(patch, ctx) {
     for (const k of allowed) {
         if (k in (patch || {})) {
             const v = patch[k];
-            if (v === null || v === undefined || v === "") continue;
+            if (v === null || v === undefined) continue;
             if (Runtime[k] === v) continue;
             changed[k] = { from: Runtime[k], to: v };
             Runtime[k] = v;

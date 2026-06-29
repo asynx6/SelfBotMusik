@@ -314,11 +314,12 @@
     }
 
     function setPauseUI(p) {
-        const playing = !p;
+        // p = paused state. When paused, show PLAY icon (to resume).
+        // When playing, show PAUSE icon (to pause).
         const ico = els.btnPause.querySelector(".ic-pause");
         const icp = els.btnPause.querySelector(".ic-play");
-        if (ico) ico.style.display = p ? "block" : "none";
-        if (icp) icp.style.display = p ? "none" : "block";
+        if (ico) ico.style.display = p ? "none" : "block";
+        if (icp) icp.style.display = p ? "block" : "none";
         els.btnPause.title = p ? "Resume" : "Pause";
         els.btnPause.setAttribute("aria-label", p ? "Resume" : "Pause");
     }
@@ -401,12 +402,10 @@
             els.cfgChannel.value = r.channelId || "";
             els.cfgLavaHost.value = r.lavaHost || "";
             els.cfgLavaPort.value = r.lavaPort || "";
-            // Password field never shows the saved value. If one is saved, the
-            // placeholder becomes a masked hint. Empty placeholder otherwise.
-            els.cfgLavaPass.value = "";
-            els.cfgLavaPass.placeholder = r.hasLavaPass
-                ? "•".repeat(Math.max(8, ((r.lavaPass && r.lavaPass.length) || 12)))
-                : "password";
+            // Password field: show masked dots when a password is saved in
+            // SQLite, empty otherwise. The backend never exposes the real value.
+            els.cfgLavaPass.value = r.hasLavaPass ? "••••••••••••" : "";
+            els.cfgLavaPass.placeholder = r.hasLavaPass ? "" : "password";
             els.cfgLavaSecure.value = String(!!r.lavaSecure);
         } catch (e) { setMsg(els.settingsMsg, "err", "Could not load config: " + e.message); }
     }
@@ -419,8 +418,10 @@
             lavaPort: Number(els.cfgLavaPort.value) || 2333,
             lavaSecure: els.cfgLavaSecure.value === "true",
         };
+        // Only send the password if the user typed a real one (not the masked placeholder).
         const pass = els.cfgLavaPass.value;
-        if (pass) body.lavaPass = pass;
+        const isMaskedDots = /^[•]{8,}$/.test(pass);
+        if (pass && !isMaskedDots) body.lavaPass = pass;
         try {
             const r = await api("/api/settings", { method: "POST", body: JSON.stringify(body) });
             setMsg(els.settingsMsg, "ok", "Saved. Click Connect to join the voice channel.");
