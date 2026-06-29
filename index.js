@@ -370,6 +370,8 @@ discordMod.wireSafetyEvents(client, {
     guildId: runtimeMod.Runtime.guildId,
     tryReconnectVC,
     resetReconnects,
+    get intentionalDisconnect() { return intentionalDisconnect; },
+    set intentionalDisconnect(v) { intentionalDisconnect = v; },
 });
 
 const { server } = webMod.buildServer(ctx);

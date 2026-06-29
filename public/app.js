@@ -123,13 +123,6 @@
         confirm: null,
     };
     function showModal(title, message, confirmLabel, danger) {
-        if (!modalEls.overlay) {
-            modalEls.overlay = $("#modalOverlay");
-            modalEls.title = $("#modalTitle");
-            modalEls.body = $("#modalBody");
-            modalEls.cancel = $("#modalCancel");
-            modalEls.confirm = $("#modalConfirm");
-        }
         if (modalResolve) { modalResolve(false); modalResolve = null; }
         return new Promise((resolve) => {
             modalResolve = resolve;
@@ -146,18 +139,21 @@
         if (modalResolve) { modalResolve(result); modalResolve = null; }
     }
     function initModal() {
-        if (modalEls.cancel && modalEls.confirm && modalEls.overlay) {
-            modalEls.cancel.addEventListener("click", () => hideModal(false));
-            modalEls.confirm.addEventListener("click", () => hideModal(true));
-            modalEls.overlay.addEventListener("click", (e) => {
-                if (e.target === modalEls.overlay) hideModal(false);
-            });
-            document.addEventListener("keydown", (e) => {
-                if (e.key === "Escape" && modalEls.overlay && !modalEls.overlay.hidden) {
-                    hideModal(false);
-                }
-            });
-        }
+        modalEls.overlay = $("#modalOverlay");
+        modalEls.title = $("#modalTitle");
+        modalEls.body = $("#modalBody");
+        modalEls.cancel = $("#modalCancel");
+        modalEls.confirm = $("#modalConfirm");
+        modalEls.cancel.addEventListener("click", () => hideModal(false));
+        modalEls.confirm.addEventListener("click", () => hideModal(true));
+        modalEls.overlay.addEventListener("click", (e) => {
+            if (e.target === modalEls.overlay) hideModal(false);
+        });
+        document.addEventListener("keydown", (e) => {
+            if (e.key === "Escape" && modalEls.overlay && !modalEls.overlay.hidden) {
+                hideModal(false);
+            }
+        });
     }
 
     function toast(text, kind = "ok") {
