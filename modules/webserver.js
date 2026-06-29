@@ -181,7 +181,11 @@ function buildServer(ctx) {
     });
 
     app.post("/api/stop", async (_req, res) => {
-        try { await ctx.stopAll(false); res.json({ ok: true }); }
+        try {
+            await ctx.stopAll(false);
+            try { await ctx.leaveVC(true); } catch {}
+            res.json({ ok: true });
+        }
         catch (e) { res.status(400).json({ error: e.message }); }
     });
 

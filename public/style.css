@@ -485,6 +485,60 @@ header {
     .toast-host { bottom: 12px; right: 12px; left: 12px; }
     .toast { max-width: 100%; }
 }
+/* === MODAL DIALOG === */
+.modal-overlay {
+    position: fixed;
+    inset: 0;
+    background: rgba(0, 0, 0, 0.65);
+    display: flex;
+    align-items: center;
+    justify-content: center;
+    z-index: 1000;
+    padding: 24px;
+    animation: modalFadeIn 0.15s ease-out;
+}
+.modal-overlay[hidden] { display: none; }
+@keyframes modalFadeIn {
+    from { opacity: 0; }
+    to   { opacity: 1; }
+}
+.modal-card {
+    background: var(--surface);
+    border: 1px solid var(--border-strong);
+    border-radius: 14px;
+    padding: 22px 24px;
+    max-width: 440px;
+    width: 100%;
+    box-shadow: 0 24px 60px -20px rgba(0, 0, 0, 0.75);
+    animation: modalSlideIn 0.15s ease-out;
+}
+@keyframes modalSlideIn {
+    from { opacity: 0; transform: translateY(-10px); }
+    to   { opacity: 1; transform: translateY(0); }
+}
+.modal-title {
+    font-size: 15px;
+    font-weight: 700;
+    color: var(--text);
+    margin-bottom: 8px;
+    letter-spacing: 0.2px;
+}
+.modal-body {
+    font-size: 13px;
+    color: var(--text-dim);
+    line-height: 1.5;
+    margin-bottom: 20px;
+}
+.modal-actions {
+    display: flex;
+    gap: 10px;
+    justify-content: flex-end;
+}
+.modal-actions .btn {
+    min-width: 80px;
+    justify-content: center;
+}
+
 @media (max-width: 420px) {
     .form-grid { grid-template-columns: 1fr; }
     .controls { grid-template-columns: 1fr; }

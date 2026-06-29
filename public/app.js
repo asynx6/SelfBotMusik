@@ -113,6 +113,53 @@
         return data;
     }
 
+    // === Custom modal dialog (replaces browser confirm()) ===
+    let modalResolve = null;
+    const modalEls = {
+        overlay: null,
+        title: null,
+        body: null,
+        cancel: null,
+        confirm: null,
+    };
+    function showModal(title, message, confirmLabel, danger) {
+        if (!modalEls.overlay) {
+            modalEls.overlay = $("#modalOverlay");
+            modalEls.title = $("#modalTitle");
+            modalEls.body = $("#modalBody");
+            modalEls.cancel = $("#modalCancel");
+            modalEls.confirm = $("#modalConfirm");
+        }
+        if (modalResolve) { modalResolve(false); modalResolve = null; }
+        return new Promise((resolve) => {
+            modalResolve = resolve;
+            modalEls.title.textContent = title;
+            modalEls.body.textContent = message;
+            modalEls.confirm.textContent = confirmLabel || "OK";
+            modalEls.confirm.className = danger ? "btn btn-danger" : "btn btn-primary";
+            modalEls.overlay.hidden = false;
+            modalEls.confirm.focus();
+        });
+    }
+    function hideModal(result) {
+        if (modalEls.overlay) modalEls.overlay.hidden = true;
+        if (modalResolve) { modalResolve(result); modalResolve = null; }
+    }
+    function initModal() {
+        if (modalEls.cancel && modalEls.confirm && modalEls.overlay) {
+            modalEls.cancel.addEventListener("click", () => hideModal(false));
+            modalEls.confirm.addEventListener("click", () => hideModal(true));
+            modalEls.overlay.addEventListener("click", (e) => {
+                if (e.target === modalEls.overlay) hideModal(false);
+            });
+            document.addEventListener("keydown", (e) => {
+                if (e.key === "Escape" && modalEls.overlay && !modalEls.overlay.hidden) {
+                    hideModal(false);
+                }
+            });
+        }
+    }
+
     function toast(text, kind = "ok") {
         const t = document.createElement("div");
         t.className = `toast ${kind}`;
@@ -383,7 +430,7 @@
     async function stop() {
         try {
             await api("/api/stop", { method: "POST" });
-            toast("Stopped");
+            toast("Stopped & left voice channel");
             await pollState();
         } catch (e) { toast(e.message, "err"); }
     }
@@ -470,11 +517,23 @@
         // Buttons
         els.btnPause.addEventListener("click", pause);
         els.btnSkip.addEventListener("click", skip);
-        els.btnStop.addEventListener("click", () => {
-            if (!state?.playing?.encoded) return stop();
-            if (confirm("Stop playback and clear the queue?")) stop();
+        els.btnStop.addEventListener("click", async () => {
+            if (!state?.playing?.encoded) {
+                // Nothing playing — still confirm before leaving VC
+                if (!state?.voiceConnected) return;
+                const ok = await showModal("Disconnect from voice?", "You are in a voice channel but nothing is playing. Leave the voice channel?", "Leave VC", true);
+                if (ok) stop();
+                return;
+            }
+            const ok = await showModal("Stop playback?", "Stop the music and leave the voice channel? This will also clear the queue.", "Stop & Leave", true);
+            if (ok) stop();
         });
-        els.btnClear.addEventListener("click", clearQueue);
+        els.btnClear.addEventListener("click", async () => {
+            const count = state?.queue?.length ? state.queue.length - 1 : 0;
+            if (count <= 0) return;
+            const ok = await showModal("Clear queue?", `Remove ${count} upcoming track${count > 1 ? "s" : ""} from the queue? The currently playing track will continue.`, "Clear", true);
+            if (ok) clearQueue();
+        });
         els.btnLoop.addEventListener("click", async () => {
             try {
                 const r = await api("/api/loop", { method: "POST" });
@@ -489,13 +548,25 @@
 
         if (els.btnLogout) {
             els.btnLogout.addEventListener("click", async () => {
+                const ok = await showModal("Sign out?", "You will be logged out of the dashboard and redirected to the login page.", "Sign out", true);
+                if (!ok) return;
                 try { await api("/api/auth/logout", { method: "POST" }); } catch {}
                 window.location.assign("/login");
             });
         }
 
         if (els.btnChangePassword) {
-            els.btnChangePassword.addEventListener("click", changePassword);
+            els.btnChangePassword.addEventListener("click", async () => {
+                const cur = els.pwCurrent.value;
+                const nxt = els.pwNext.value;
+                const cfm = els.pwConfirm.value;
+                if (!cur || !nxt || !cfm) { setMsg(els.pwMsg, "err", "All three fields are required."); return; }
+                if (nxt !== cfm) { setMsg(els.pwMsg, "err", "New password and confirmation do not match."); return; }
+                if (nxt.length < 4) { setMsg(els.pwMsg, "err", "New password must be at least 4 characters."); return; }
+                const ok = await showModal("Change password?", "This will update your dashboard password immediately. You will stay logged in.", "Change password", true);
+                if (!ok) return;
+                changePassword();
+            });
         }
 
         // Settings
@@ -558,6 +629,7 @@
                 setTimeout(() => toast("Configuration is incomplete. Open Settings to fill it in.", "info"), 300);
             }
         } catch { window.location.assign("/login"); return; }
+        initModal();
         wire();
         connectWS();
         pollState();
