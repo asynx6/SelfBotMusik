@@ -14,7 +14,7 @@ db.pragma("journal_mode = WAL");
 db.pragma("foreign_keys = ON");
 
 // Boot-time schema. All persistent state lives here.
-db.exec(`
+const SCHEMA_SQL = `
     CREATE TABLE IF NOT EXISTS settings (
         key   TEXT PRIMARY KEY,
         value TEXT
@@ -38,7 +38,86 @@ db.exec(`
         event   TEXT NOT NULL,
         detail  TEXT
     );
-`);
+    CREATE TABLE IF NOT EXISTS tracks (
+        id             INTEGER PRIMARY KEY,
+        source_key     TEXT UNIQUE NOT NULL,
+        source_type    TEXT NOT NULL,
+        source_name    TEXT,
+        identifier     TEXT,
+        title          TEXT NOT NULL,
+        artist         TEXT,
+        album          TEXT,
+        duration_ms    INTEGER,
+        uri            TEXT,
+        file_path      TEXT,
+        file_size      INTEGER,
+        format         TEXT,
+        sha256         TEXT,
+        cover_path     TEXT,
+        cover_url      TEXT,
+        created_at     INTEGER NOT NULL,
+        downloaded_at  INTEGER,
+        play_count     INTEGER NOT NULL DEFAULT 0,
+        last_played_at INTEGER
+    );
+    CREATE INDEX IF NOT EXISTS idx_tracks_sha256 ON tracks(sha256);
+    CREATE INDEX IF NOT EXISTS idx_tracks_artist ON tracks(artist);
+    CREATE TABLE IF NOT EXISTS playlists (
+        id          INTEGER PRIMARY KEY,
+        name        TEXT NOT NULL,
+        description TEXT,
+        created_at  INTEGER NOT NULL,
+        updated_at  INTEGER NOT NULL
+    );
+    CREATE TABLE IF NOT EXISTS playlist_tracks (
+        playlist_id INTEGER NOT NULL REFERENCES playlists(id) ON DELETE CASCADE,
+        track_id    INTEGER NOT NULL REFERENCES tracks(id)    ON DELETE CASCADE,
+        position    INTEGER NOT NULL,
+        added_at    INTEGER NOT NULL,
+        PRIMARY KEY (playlist_id, track_id)
+    );
+    CREATE TABLE IF NOT EXISTS likes (
+        track_id INTEGER PRIMARY KEY REFERENCES tracks(id) ON DELETE CASCADE,
+        liked_at INTEGER NOT NULL
+    );
+    CREATE TABLE IF NOT EXISTS history (
+        id        INTEGER PRIMARY KEY,
+        track_id  INTEGER NOT NULL REFERENCES tracks(id) ON DELETE CASCADE,
+        played_at INTEGER NOT NULL,
+        ms_played INTEGER
+    );
+    CREATE TABLE IF NOT EXISTS downloads (
+        id          INTEGER PRIMARY KEY,
+        track_id    INTEGER NOT NULL REFERENCES tracks(id) ON DELETE CASCADE,
+        status      TEXT NOT NULL,
+        progress    REAL NOT NULL DEFAULT 0,
+        error       TEXT,
+        created_at  INTEGER NOT NULL,
+        started_at  INTEGER,
+        finished_at INTEGER
+    );
+`;
+db.exec(SCHEMA_SQL);
+
+// ---- Default settings for the library/foundation phase. ----
+// Only sets keys that don't yet exist so user values are never overwritten.
+const DEFAULT_SETTINGS = {
+    download_concurrency: "3",
+    max_upload_mb: "200",
+    library_quota_gb: "10",
+    ytdlp_path: "yt-dlp",
+    ffmpeg_path: "ffmpeg",
+};
+
+function ensureDefaults(targetDb = db) {
+    const insert = targetDb.prepare(
+        "INSERT INTO settings (key, value) SELECT ?, ? WHERE NOT EXISTS (SELECT 1 FROM settings WHERE key = ?)"
+    );
+    for (const [key, value] of Object.entries(DEFAULT_SETTINGS)) {
+        insert.run(key, value, key);
+    }
+}
+ensureDefaults();
 
 // ---- Settings helpers (single-row key-value store). ----
 function getSetting(key, fallback = null) {
@@ -84,11 +163,14 @@ function audit(event, detail = null) {
 
 module.exports = {
     db,
+    SCHEMA_SQL,
     DB_PATH,
     DATA_DIR,
     getSetting,
     setSetting,
     getAllSettings,
+    ensureDefaults,
+    DEFAULT_SETTINGS,
     ensureJwtSecret,
     audit,
 };
