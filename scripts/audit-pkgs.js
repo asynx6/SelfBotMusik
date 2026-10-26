@@ -5,10 +5,10 @@ const path = require("path");
 const root = process.cwd();
 const pkgs = [
     "@discordjs/voice", "@distube/ytdl-core",
-    "bcryptjs", "better-sqlite3", "cookie-parser",
+    "bcryptjs", "better-sqlite3", "busboy", "cookie-parser",
     "discord-ytdl-core", "discord.js-selfbot-v13",
     "dotenv", "express", "ffmpeg-static", "jsonwebtoken",
-    "node-fetch", "opusscript", "poru", "shoukaku",
+    "music-metadata", "node-fetch", "opusscript", "poru", "shoukaku",
     "sodium-native", "tweetnacl", "ws"
 ];
 
