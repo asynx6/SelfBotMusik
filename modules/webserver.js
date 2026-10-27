@@ -13,6 +13,9 @@ const db = require("./database");
 const library = require("./library");
 const downloads = require("./downloads");
 const uploads = require("./uploads");
+const playlists = require("./playlists");
+const likes = require("./likes");
+const history = require("./history");
 
 // Serialize a DB track row for API responses, adding downloaded/downloading flags.
 function serializeApiTrack(track) {
@@ -47,6 +50,9 @@ function buildServer(ctx) {
     const dl = ctx.downloads || downloads;
     const pc = ctx.playerController || null;
     const searchTracksFn = ctx.searchTracks || null;
+    const pl = ctx.playlists || playlists;
+    const lk = ctx.likes || likes;
+    const hist = ctx.history || history;
 
     // Send a snapshot to all WS clients. The browser only redraws when
     // the payload changes — we don't need to log every heartbeat.
@@ -405,6 +411,147 @@ function buildServer(ctx) {
             if (!pc) return res.status(503).json({ error: "Player controller not available" });
             await pc.enqueue(tracks, requester);
             res.json({ ok: true, count: tracks.length });
+        } catch (e) { res.status(400).json({ error: e.message }); }
+    });
+
+    // === Tahap 2: Play Next, Shuffle, Queue Reorder, Jump ===
+    app.post("/api/queue/play-next", async (req, res) => {
+        try {
+            const ids = req.body?.trackIds;
+            if (!Array.isArray(ids) || !ids.every((n) => Number.isInteger(n))) {
+                return res.status(400).json({ error: "trackIds must be an array of integers" });
+            }
+            const requester = req.body?.requester || "Web";
+            const tracks = ids.map((id) => lib.getById(id)).filter(Boolean);
+            if (!tracks.length) return res.status(404).json({ error: "No valid tracks found" });
+            if (!pc) return res.status(503).json({ error: "Player controller not available" });
+            const r = pc.playNext(tracks, requester);
+            res.json({ ok: true, ...r });
+        } catch (e) { res.status(400).json({ error: e.message }); }
+    });
+
+    app.post("/api/queue/shuffle", (_req, res) => {
+        try {
+            if (!pc) return res.status(503).json({ error: "Player controller not available" });
+            res.json({ ok: true, ...pc.shuffle() });
+        } catch (e) { res.status(400).json({ error: e.message }); }
+    });
+
+    app.post("/api/queue/reorder", (req, res) => {
+        try {
+            const { oldIndex, newIndex } = req.body || {};
+            if (!pc) return res.status(503).json({ error: "Player controller not available" });
+            res.json({ ok: true, ...pc.reorder(oldIndex, newIndex) });
+        } catch (e) { res.status(400).json({ error: e.message }); }
+    });
+
+    app.post("/api/queue/jump", async (req, res) => {
+        try {
+            const { index } = req.body || {};
+            if (!pc) return res.status(503).json({ error: "Player controller not available" });
+            await pc.jumpTo(Number(index));
+            res.json({ ok: true, index: pc.currentIndex });
+        } catch (e) { res.status(400).json({ error: e.message }); }
+    });
+
+    // === Tahap 2: Playlists API ===
+    app.get("/api/playlists", (req, res) => {
+        try {
+            const limit = parseInt(req.query.limit, 10);
+            const offset = parseInt(req.query.offset, 10);
+            res.json(pl.listPlaylists({ limit, offset }));
+        } catch (e) { res.status(400).json({ error: e.message }); }
+    });
+
+    app.post("/api/playlists", (req, res) => {
+        try {
+            const { name, description } = req.body || {};
+            const created = pl.createPlaylist(name, description);
+            res.status(201).json({ ok: true, playlist: created });
+        } catch (e) { res.status(400).json({ error: e.message }); }
+    });
+
+    app.get("/api/playlists/:id", (req, res) => {
+        try {
+            const playlist = pl.getPlaylistById(Number(req.params.id));
+            if (!playlist) return res.status(404).json({ error: "Playlist not found" });
+            res.json({ ok: true, playlist });
+        } catch (e) { res.status(400).json({ error: e.message }); }
+    });
+
+    app.patch("/api/playlists/:id", (req, res) => {
+        try {
+            const updated = pl.updatePlaylist(Number(req.params.id), req.body || {});
+            res.json({ ok: true, playlist: updated });
+        } catch (e) { res.status(400).json({ error: e.message }); }
+    });
+
+    app.delete("/api/playlists/:id", (req, res) => {
+        try {
+            const r = pl.deletePlaylist(Number(req.params.id));
+            if (!r.deleted) return res.status(404).json({ error: "Playlist not found" });
+            res.json({ ok: true });
+        } catch (e) { res.status(400).json({ error: e.message }); }
+    });
+
+    app.get("/api/playlists/:id/tracks", (req, res) => {
+        try {
+            res.json(pl.getPlaylistTracks(Number(req.params.id)));
+        } catch (e) { res.status(404).json({ error: e.message }); }
+    });
+
+    app.post("/api/playlists/:id/tracks", (req, res) => {
+        try {
+            const { trackId } = req.body || {};
+            const r = pl.addTrackToPlaylist(Number(req.params.id), Number(trackId));
+            res.json({ ok: true, ...r });
+        } catch (e) { res.status(400).json({ error: e.message }); }
+    });
+
+    app.delete("/api/playlists/:id/tracks/:trackId", (req, res) => {
+        try {
+            const r = pl.removeTrackFromPlaylist(Number(req.params.id), Number(req.params.trackId));
+            res.json({ ok: true, ...r });
+        } catch (e) { res.status(400).json({ error: e.message }); }
+    });
+
+    app.post("/api/playlists/:id/reorder", (req, res) => {
+        try {
+            const { trackIdsOrder } = req.body || {};
+            const r = pl.reorderPlaylistTracks(Number(req.params.id), trackIdsOrder);
+            res.json({ ok: true, ...r });
+        } catch (e) { res.status(400).json({ error: e.message }); }
+    });
+
+    // === Tahap 2: Likes API ===
+    app.get("/api/likes", (req, res) => {
+        try {
+            const limit = parseInt(req.query.limit, 10);
+            const offset = parseInt(req.query.offset, 10);
+            res.json(lk.listLikes({ limit, offset }));
+        } catch (e) { res.status(400).json({ error: e.message }); }
+    });
+
+    app.post("/api/likes/:trackId", (req, res) => {
+        try {
+            const r = lk.toggleLike(Number(req.params.trackId));
+            res.json({ ok: true, ...r });
+        } catch (e) { res.status(400).json({ error: e.message }); }
+    });
+
+    app.get("/api/likes/:trackId", (req, res) => {
+        try {
+            const liked = lk.isLiked(Number(req.params.trackId));
+            res.json({ liked, track_id: Number(req.params.trackId) });
+        } catch (e) { res.status(400).json({ error: e.message }); }
+    });
+
+    // === Tahap 2: History API ===
+    app.get("/api/history", (req, res) => {
+        try {
+            const limit = parseInt(req.query.limit, 10);
+            const offset = parseInt(req.query.offset, 10);
+            res.json(hist.listHistory({ limit, offset }));
         } catch (e) { res.status(400).json({ error: e.message }); }
     });
 

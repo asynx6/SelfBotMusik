@@ -42,6 +42,9 @@ const webMod = require("./modules/webserver");
 const library = require("./modules/library");
 const downloads = require("./modules/downloads");
 const uploads = require("./modules/uploads");
+const playlists = require("./modules/playlists");
+const likes = require("./modules/likes");
+const history = require("./modules/history");
 const PlayerController = require("./modules/player-controller");
 const { LavalinkEngine } = require("./modules/engines/lavalink");
 const { LocalEngine } = require("./modules/engines/local");
@@ -394,6 +397,9 @@ const ctx = {
     library,
     downloads,
     uploads,
+    playlists,
+    likes,
+    history,
     playerController,
     // Adapter: searchTracks returns Poru Track objects ({ track, info }) —
     // webserver/library expect plain info objects. Flatten + keep encoded for LavalinkEngine.

@@ -407,6 +407,72 @@ class PlayerController extends EventEmitter {
         return { cleared, remaining: this.queue.length };
     }
 
+    playNext(tracks, requester = "Web") {
+        if (!tracks) return { added: 0 };
+        const list = Array.isArray(tracks) ? tracks : [tracks];
+        const valid = list.filter(Boolean);
+        if (!valid.length) return { added: 0 };
+
+        const items = valid.map((t) => ({ track: t, requester }));
+        const insertPos = this.currentIndex >= 0 ? this.currentIndex + 1 : 0;
+        this.queue.splice(insertPos, 0, ...items);
+
+        if (this.currentIndex === -1) {
+            this.currentIndex = 0;
+            this.playCurrent().catch(() => {});
+        }
+        this._emitState();
+        return { added: items.length, position: insertPos };
+    }
+
+    shuffle() {
+        if (this.queue.length <= 1) return { shuffled: false, count: this.queue.length };
+
+        // Keep currently playing track in place, shuffle the upcoming tracks
+        const startIdx = this.currentIndex >= 0 ? this.currentIndex + 1 : 0;
+        const upcoming = this.queue.slice(startIdx);
+
+        // Fisher-Yates shuffle
+        for (let i = upcoming.length - 1; i > 0; i--) {
+            const j = Math.floor(Math.random() * (i + 1));
+            [upcoming[i], upcoming[j]] = [upcoming[j], upcoming[i]];
+        }
+
+        this.queue = this.queue.slice(0, startIdx).concat(upcoming);
+        this._emitState();
+        return { shuffled: true, count: upcoming.length };
+    }
+
+    reorder(oldIndex, newIndex) {
+        const from = Number(oldIndex);
+        const to = Number(newIndex);
+        if (!Number.isInteger(from) || !Number.isInteger(to)) {
+            throw new Error("oldIndex and newIndex must be integers");
+        }
+        if (from < 0 || from >= this.queue.length || to < 0 || to >= this.queue.length) {
+            throw new Error("Index out of bounds");
+        }
+        if (from === to) return { moved: false };
+
+        // Can't move currently playing track
+        if (from === this.currentIndex || to === this.currentIndex) {
+            throw new Error("Cannot move to or from currently playing position");
+        }
+
+        const [item] = this.queue.splice(from, 1);
+        this.queue.splice(to, 0, item);
+
+        // Adjust currentIndex if affected
+        if (from < this.currentIndex && to >= this.currentIndex) {
+            this.currentIndex--;
+        } else if (from > this.currentIndex && to <= this.currentIndex) {
+            this.currentIndex++;
+        }
+
+        this._emitState();
+        return { moved: true, from, to };
+    }
+
     // True when the track with this library id is the currently playing item.
     isPlayingTrack(id) {
         if (this.currentIndex < 0 || this.currentIndex >= this.queue.length) return false;
