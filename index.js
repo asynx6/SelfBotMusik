@@ -323,11 +323,20 @@ let playerController = null;
 try {
     playerController = new PlayerController({
         library,
-        createLavalinkEngine: () => new LavalinkEngine({ poru, guildId: runtimeMod.Runtime.guildId }),
-        createLocalEngine: () => new LocalEngine({
+        // Async factory: LavalinkEngine.destroy() kills the Poru player, so
+        // before re-creating the engine we must restore the voice connection.
+        createLavalinkEngine: async () => {
+            await ensurePoru();
+            const g = runtimeMod.Runtime.guildId;
+            if (g && runtimeMod.Runtime.channelId && !poru.players.get(g)) {
+                await joinVC(g, runtimeMod.Runtime.channelId);
+            }
+            return new LavalinkEngine({ poru, guildId: g });
+        },
+        createLocalEngine: ({ channelId } = {}) => new LocalEngine({
             client,
             guildId: runtimeMod.Runtime.guildId,
-            channelId: runtimeMod.Runtime.channelId,
+            channelId: channelId || runtimeMod.Runtime.channelId,
             ffmpegPath: process.env.FFMPEG_PATH || "ffmpeg",
             dataDir: db.DATA_DIR,
         }),

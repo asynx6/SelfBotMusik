@@ -304,6 +304,8 @@ test("LocalEngine: play validates file exists and spawns ffmpeg with correct arg
         "pipe:1"
     ]);
 
+    await engine.destroy(); // clears play-start watchdog timer
+
     fs.rmSync(tmpDir, { recursive: true, force: true });
 });
 
@@ -326,6 +328,7 @@ test("LocalEngine: pause, resume, setVolume, getPositionMs delegate properly", a
             playbackDuration: 3450
         }
     };
+    const mockVoiceConnection = { subscribe: () => {}, destroy: () => {} };
 
     const mockFfmpeg = new EventEmitter();
     mockFfmpeg.stdout = new PassThrough();
@@ -335,6 +338,7 @@ test("LocalEngine: pause, resume, setVolume, getPositionMs delegate properly", a
         guildId: "g1",
         channelId: "c1",
         dataDir: tmpDir,
+        voiceConnection: mockVoiceConnection,
         audioPlayer: mockAudioPlayer,
         spawn: () => mockFfmpeg
     });
@@ -351,6 +355,8 @@ test("LocalEngine: pause, resume, setVolume, getPositionMs delegate properly", a
     assert.equal(engine.volume, 75);
 
     assert.equal(engine.getPositionMs(), 3450);
+
+    await engine.destroy(); // clears play-start watchdog timer
 
     fs.rmSync(tmpDir, { recursive: true, force: true });
 });
@@ -419,6 +425,7 @@ test("LocalEngine: audioPlayer and ffmpeg events emit 'end' and 'error'", async 
         guildId: "g1",
         channelId: "c1",
         dataDir: tmpDir,
+        voiceConnection: { subscribe: () => {}, destroy: () => {} },
         audioPlayer: mockAudioPlayer,
         spawn: () => mockFfmpeg
     });

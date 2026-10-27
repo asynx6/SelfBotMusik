@@ -221,8 +221,11 @@ class PlayerController extends EventEmitter {
                     this.currentEngineType = null;
                 }
 
+                // Prefer the latest voice target so a fresh LocalEngine
+                // connects to the channel the user actually selected.
+                const vt = typeof this.getVoiceTarget === "function" ? this.getVoiceTarget() : null;
                 const newEngine = targetType === "local"
-                    ? await this.createLocalEngine()
+                    ? await this.createLocalEngine({ channelId: vt?.channelId })
                     : await this.createLavalinkEngine();
 
                 if (!newEngine) {

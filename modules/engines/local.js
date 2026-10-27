@@ -53,8 +53,13 @@ class LocalEngine extends BaseEngine {
     _setupPlayerListeners() {
         if (!this.audioPlayer || typeof this.audioPlayer.on !== "function") return;
 
+        this.audioPlayer.on(AudioPlayerStatus.Playing, () => {
+            clearTimeout(this._playStartTimer);
+        });
+
         this.audioPlayer.on(AudioPlayerStatus.Idle, () => {
             if (this._destroyed) return;
+            clearTimeout(this._playStartTimer);
             this._cleanupFfmpeg();
             const reason = this._stopping ? "stop" : "finished";
             this._stopping = false;
@@ -150,12 +155,24 @@ class LocalEngine extends BaseEngine {
         }
 
         this._ensureVoiceConnection();
-        if (this.voiceConnection && typeof this.voiceConnection.subscribe === "function" && this.audioPlayer) {
+        if (!this.voiceConnection) {
+            throw new Error("Failed to establish voice connection (joinVoiceChannel returned null)");
+        }
+        if (typeof this.voiceConnection.subscribe === "function" && this.audioPlayer) {
             this.voiceConnection.subscribe(this.audioPlayer);
         }
 
         if (this.audioPlayer && typeof this.audioPlayer.play === "function") {
             this.audioPlayer.play(resource);
+
+            // Watchdog: if Playing never arrives (e.g. no subscriber, dead
+            // connection), the track would hang forever — fail loudly instead.
+            clearTimeout(this._playStartTimer);
+            this._playStartTimer = setTimeout(() => {
+                if (this._destroyed || this.audioPlayer?.state?.status === AudioPlayerStatus.Playing) return;
+                this._cleanupFfmpeg();
+                this.emit("error", new Error("Playback did not start within 5s"));
+            }, 5000);
         }
     }
 
@@ -195,6 +212,7 @@ class LocalEngine extends BaseEngine {
 
     async destroy() {
         this._destroyed = true;
+        clearTimeout(this._playStartTimer);
         this._stopping = true;
         this._cleanupFfmpeg();
 

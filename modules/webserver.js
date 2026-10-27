@@ -205,6 +205,9 @@ function buildServer(ctx) {
             const requester = req.body?.requester || "Web";
             if (!query) return res.status(400).json({ error: "Query required" });
             if (pc) {
+                if (typeof searchTracksFn !== "function") {
+                    return res.status(400).json({ error: "Search service unavailable" });
+                }
                 const tracks = await searchTracksFn(query, requester);
                 if (!tracks || !tracks.length) return res.status(400).json({ error: "No results" });
                 for (const info of tracks) lib.upsertFromLavalink(info);
@@ -231,6 +234,8 @@ function buildServer(ctx) {
         try {
             if (pc) {
                 await pc.stop();
+                // Match legacy Stop behavior: also leave the voice channel.
+                try { await ctx.leaveVC(true); } catch {}
                 return res.json({ ok: true });
             }
             await ctx.stopAll(false);

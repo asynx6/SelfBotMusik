@@ -556,3 +556,52 @@ test("15. QUEUE loop + single unplayable track: stops cleanly instead of infinit
     assert.equal(controller.queue.length, 0);
     assert(controller.lastError !== null, "lastError should record the skip");
 });
+
+test("16. Handoff lavalink -> local -> lavalink: factory re-runs and second lavalink track plays", async () => {
+    const tmpDir = createTempDir();
+    const localFile = path.join(tmpDir, "library", "mid.mp3");
+    fs.writeFileSync(localFile, "local audio bytes");
+
+    let lavalinkCreated = 0;
+    let lavalinkEngine = null;
+    let localEngine = null;
+
+    const controller = new PlayerController({
+        dataDir: tmpDir,
+        // Simulates index.js: LavalinkEngine.destroy() kills the Poru player,
+        // so the factory must recreate it before returning a new engine.
+        createLavalinkEngine: async () => {
+            lavalinkCreated++;
+            lavalinkEngine = new MockEngine("lavalink");
+            return lavalinkEngine;
+        },
+        createLocalEngine: () => {
+            localEngine = new MockEngine("local");
+            return localEngine;
+        }
+    });
+
+    const t1 = { title: "Lava 1", uri: "https://yt.com/1" };
+    const t2 = { title: "Local Mid", file_path: "mid.mp3" };
+    const t3 = { title: "Lava 3", uri: "https://yt.com/3" };
+    await controller.enqueue([t1, t2, t3], "user");
+
+    assert.equal(lavalinkCreated, 1);
+    assert.equal(lavalinkEngine.playedTrack.title, "Lava 1");
+
+    // Local track handoff
+    lavalinkEngine.emit("end", { reason: "finished" });
+    await new Promise((r) => setImmediate(r));
+    assert.equal(controller.currentEngineType, "local");
+    assert.equal(localEngine.playedTrack.title, "Local Mid");
+
+    // Back to lavalink: factory must be called again (player recreated) and play
+    localEngine.emit("end", { reason: "finished" });
+    await new Promise((r) => setImmediate(r));
+
+    assert.equal(lavalinkCreated, 2, "Lavalink factory must re-run after destroy");
+    assert.equal(controller.currentEngineType, "lavalink");
+    assert.equal(lavalinkEngine.playedTrack.title, "Lava 3", "Second lavalink track should play, not be skipped");
+
+    fs.rmSync(tmpDir, { recursive: true, force: true });
+});
