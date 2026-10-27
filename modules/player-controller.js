@@ -398,6 +398,13 @@ class PlayerController extends EventEmitter {
         return { cleared, remaining: this.queue.length };
     }
 
+    // True when the track with this library id is the currently playing item.
+    isPlayingTrack(id) {
+        if (this.currentIndex < 0 || this.currentIndex >= this.queue.length) return false;
+        const cur = this.queue[this.currentIndex];
+        return !!(cur && cur.track && cur.track.id !== undefined && Number(cur.track.id) === Number(id));
+    }
+
     getSnapshot() {
         const currentItem = (this.currentIndex >= 0 && this.currentIndex < this.queue.length)
             ? this.queue[this.currentIndex]
