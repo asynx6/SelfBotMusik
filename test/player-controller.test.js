@@ -512,3 +512,30 @@ test("13. removeAt(0) is legal when track 0 is not currently playing", async () 
     assert.equal(controller.currentIndex, 1, "Current index shifts down when an earlier track is removed");
     assert.equal(lavalinkEngine.playedTrack.title, "T3");
 });
+
+test("14. TRACK loop with track erroring mid-playback: skips forward instead of replaying same track", async () => {
+    let lavalinkEngine = null;
+    const controller = new PlayerController({
+        createLavalinkEngine: () => {
+            lavalinkEngine = new MockEngine("lavalink");
+            return lavalinkEngine;
+        }
+    });
+
+    controller.setLoop(1); // TRACK
+
+    const bad = { title: "Bad Song", uri: "https://yt.com/bad" };
+    const good = { title: "Good Song", uri: "https://yt.com/good" };
+    await controller.enqueue([bad, good], "user");
+
+    assert.equal(controller.currentIndex, 0);
+    assert.equal(lavalinkEngine.playedTrack.title, "Bad Song");
+
+    // Track errors mid-playback
+    lavalinkEngine.emit("error", new Error("playback failed"));
+    await new Promise((r) => setImmediate(r));
+
+    assert.equal(controller.currentIndex, 1, "Errored track should be skipped forward even in TRACK loop");
+    assert.equal(lavalinkEngine.playedTrack.title, "Good Song");
+    assert(controller.lastError !== null, "lastError should be set");
+});

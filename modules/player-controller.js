@@ -146,14 +146,14 @@ class PlayerController extends EventEmitter {
             if (this._stopping || this.currentEngine !== engine) return;
             this.lastError = err;
             this._logAudit("track_error", err?.message || String(err));
-            await this.next();
+            await this._skipForward();
         });
 
         engine.on("stuck", async (data) => {
             if (this._stopping || this.currentEngine !== engine) return;
             this.lastError = new Error("Track stuck in playback");
             this._logAudit("track_stuck", data ? JSON.stringify(data) : "Track stuck");
-            await this.next();
+            await this._skipForward();
         });
     }
 
