@@ -10,6 +10,28 @@ const auth = require("./auth");
 const cfg = require("./config");
 const stateMod = require("./state");
 const db = require("./database");
+const library = require("./library");
+const downloads = require("./downloads");
+const uploads = require("./uploads");
+
+// Serialize a DB track row for API responses, adding downloaded/downloading flags.
+function serializeApiTrack(track) {
+    if (!track) return null;
+    const info = track.info || {};
+    return {
+        id: track.id,
+        title: track.title || info.title || "Unknown",
+        author: track.artist || track.author || info.author || "Unknown",
+        duration: track.duration_ms ?? track.duration ?? info.length ?? 0,
+        uri: track.uri || info.uri || "",
+        thumbnail: track.cover_url
+            || info.artworkUrl
+            || (track.identifier ? `https://i.ytimg.com/vi/${track.identifier}/hqdefault.jpg` : "")
+            || "",
+        downloaded: !!track.file_path,
+        downloading: false, // set by caller when downloads service available
+    };
+}
 
 // Build the full Express app + HTTP server + WebSocket bridge.
 // ctx exposes: enqueue/skip/stop/pause/setVolume/cycleLoop/setLoop/removeAt/clearQueue,
@@ -18,6 +40,13 @@ function buildServer(ctx) {
     const app = express();
     app.use(express.json());
     app.use(cookieParser());
+
+    // Services: ctx can inject mocks (tests) or pre-wired instances (task 9);
+    // fall back to the singleton modules for standalone use.
+    const lib = ctx.library || library;
+    const dl = ctx.downloads || downloads;
+    const pc = ctx.playerController || null;
+    const searchTracksFn = ctx.searchTracks || null;
 
     // Send a snapshot to all WS clients. The browser only redraws when
     // the payload changes — we don't need to log every heartbeat.
@@ -116,6 +145,10 @@ function buildServer(ctx) {
 
     // === Public API ===
     app.get("/api/state", (_req, res) => {
+        if (pc && typeof pc.getSnapshot === "function") {
+            ctx.syncStateFromPlayer?.();
+            return res.json({ ...stateMod.snapshot(), ...pc.getSnapshot() });
+        }
         ctx.syncStateFromPlayer();
         res.json(stateMod.snapshot());
     });
@@ -165,9 +198,21 @@ function buildServer(ctx) {
         }
     });
 
+    // --- Legacy dashboard endpoints, routed through PlayerController when available. ---
     app.post("/api/play", async (req, res) => {
         try {
-            const r = await ctx.enqueue(req.body?.query || "", req.body?.requester || "Web");
+            const query = req.body?.query || "";
+            const requester = req.body?.requester || "Web";
+            if (!query) return res.status(400).json({ error: "Query required" });
+            if (pc) {
+                const tracks = await searchTracksFn(query, requester);
+                if (!tracks || !tracks.length) return res.status(400).json({ error: "No results" });
+                for (const info of tracks) lib.upsertFromLavalink(info);
+                const rows = tracks.map((info) => lib.findBySourceKey(`${info.sourceName}:${info.identifier}`));
+                const r = await pc.enqueue(rows, requester);
+                return res.json({ ok: true, track: r });
+            }
+            const r = await ctx.enqueue(query, requester);
             res.json({ ok: true, track: r });
         } catch (e) {
             console.error("api/play:", e.message);
@@ -176,12 +221,18 @@ function buildServer(ctx) {
     });
 
     app.post("/api/skip", async (_req, res) => {
-        try { res.json(await ctx.skipTrack()); }
-        catch (e) { res.status(400).json({ error: e.message }); }
+        try {
+            if (pc) return res.json({ ok: true, ...(await pc.next()) ?? {} });
+            res.json(await ctx.skipTrack());
+        } catch (e) { res.status(400).json({ error: e.message }); }
     });
 
     app.post("/api/stop", async (_req, res) => {
         try {
+            if (pc) {
+                await pc.stop();
+                return res.json({ ok: true });
+            }
             await ctx.stopAll(false);
             try { await ctx.leaveVC(true); } catch {}
             res.json({ ok: true });
@@ -191,6 +242,7 @@ function buildServer(ctx) {
 
     app.post("/api/pause", async (_req, res) => {
         try {
+            if (pc) return res.json({ ok: true, ...(await pc.togglePause()) });
             if (!ctx.getPlayer()) return res.json({ ok: true, paused: false, note: "no player" });
             const r = await ctx.togglePause();
             res.json({ ok: true, ...r });
@@ -199,6 +251,7 @@ function buildServer(ctx) {
 
     app.post("/api/volume", async (req, res) => {
         try {
+            if (pc) return res.json({ ok: true, ...(await pc.setVolume(req.body?.volume ?? 100)) });
             const r = await ctx.setVolume(req.body?.volume ?? 100);
             res.json({ ok: true, ...r });
         } catch (e) { res.status(400).json({ error: e.message }); }
@@ -207,21 +260,144 @@ function buildServer(ctx) {
     app.post("/api/loop", async (req, res) => {
         try {
             const explicit = (req.body && Number.isInteger(req.body.mode));
+            if (pc) {
+                const r = explicit ? pc.setLoop(req.body.mode) : pc.cycleLoop();
+                return res.json({ ok: true, ...r });
+            }
             const r = explicit ? await ctx.setLoop(req.body.mode) : await ctx.cycleLoop();
             res.json({ ok: true, ...r });
         } catch (e) { res.status(400).json({ error: e.message }); }
     });
 
     app.post("/api/clear", async (_req, res) => {
-        try { res.json({ ok: true, ...(await ctx.clearQueue()) }); }
-        catch (e) { res.status(400).json({ error: e.message }); }
+        try {
+            if (pc) return res.json({ ok: true, ...pc.clearQueue() });
+            res.json({ ok: true, ...(await ctx.clearQueue()) });
+        } catch (e) { res.status(400).json({ error: e.message }); }
     });
 
     app.delete("/api/queue/:idx", async (req, res) => {
         try {
             const idx = Number(req.params.idx);
+            if (pc) return res.json({ ok: true, ...pc.removeAt(idx) });
             const r = await ctx.removeAt(idx);
             res.json({ ok: true, ...r });
+        } catch (e) { res.status(400).json({ error: e.message }); }
+    });
+
+    // === New library / download / queue endpoints ===
+    app.post("/api/search", async (req, res) => {
+        try {
+            const query = String(req.body?.query || "").trim();
+            if (!query) return res.status(400).json({ error: "Query required" });
+            const requester = req.body?.requester || "Web";
+            const infos = await searchTracksFn(query, requester);
+            if (!infos || !infos.length) return res.status(404).json({ error: "No results" });
+            const out = infos.map((info) => {
+                const row = lib.upsertFromLavalink(info);
+                const t = serializeApiTrack(row);
+                t.downloading = dl.isDownloading(row.id);
+                return t;
+            });
+            res.json(out);
+        } catch (e) {
+            console.error("api/search:", e.message);
+            res.status(400).json({ error: e.message });
+        }
+    });
+
+    app.get("/api/library/tracks", (req, res) => {
+        try {
+            const limit = parseInt(req.query.limit, 10);
+            const offset = parseInt(req.query.offset, 10);
+            const { tracks, total } = lib.list({
+                query: typeof req.query.query === "string" ? req.query.query : undefined,
+                filter: req.query.filter || "all",
+                limit: Number.isInteger(limit) && limit >= 0 ? limit : 50,
+                offset: Number.isInteger(offset) && offset >= 0 ? offset : 0,
+            });
+            res.json({
+                tracks: tracks.map((row) => {
+                    const t = serializeApiTrack(row);
+                    t.downloading = dl.isDownloading(row.id);
+                    return t;
+                }),
+                total,
+            });
+        } catch (e) { res.status(400).json({ error: e.message }); }
+    });
+
+    app.post("/api/library/upload", (req, res) => {
+        uploads.handleUpload(req, res);
+    });
+
+    app.delete("/api/library/tracks/:id/file", (req, res) => {
+        try {
+            const row = lib.removeFile(Number(req.params.id));
+            if (!row) return res.status(404).json({ error: "Track not found" });
+            res.json({ ok: true });
+        } catch (e) { res.status(400).json({ error: e.message }); }
+    });
+
+    app.delete("/api/library/tracks/:id", (req, res) => {
+        try {
+            const id = Number(req.params.id);
+            if (pc && pc.isPlayingTrack(id)) {
+                return res.status(400).json({ error: "Cannot delete currently playing track" });
+            }
+            lib.remove(id);
+            res.json({ ok: true });
+        } catch (e) { res.status(400).json({ error: e.message }); }
+    });
+
+    app.get("/api/library/tracks/:id/cover", (req, res) => {
+        try {
+            const row = lib.getById(Number(req.params.id));
+            if (!row || !row.cover_path) {
+                return res.status(404).json({ error: "Cover not found" });
+            }
+            const coverPath = lib.resolveCoverPath(row.cover_path);
+            if (!require("fs").existsSync(coverPath)) {
+                return res.status(404).json({ error: "Cover not found" });
+            }
+            res.sendFile(coverPath);
+        } catch (e) { res.status(404).json({ error: "Cover not found" }); }
+    });
+
+    app.post("/api/downloads", (req, res) => {
+        try {
+            const ids = req.body?.trackIds;
+            if (!Array.isArray(ids) || !ids.every((n) => Number.isInteger(n))) {
+                return res.status(400).json({ error: "trackIds must be an array of integers" });
+            }
+            const queued = dl.enqueue(ids);
+            res.json({ ok: true, queued });
+        } catch (e) { res.status(400).json({ error: e.message }); }
+    });
+
+    app.get("/api/downloads", (_req, res) => {
+        res.json({ downloads: dl.list() });
+    });
+
+    app.delete("/api/downloads/:id", (req, res) => {
+        try {
+            dl.cancel(Number(req.params.id));
+            res.json({ ok: true });
+        } catch (e) { res.status(400).json({ error: e.message }); }
+    });
+
+    app.post("/api/queue/add", async (req, res) => {
+        try {
+            const ids = req.body?.trackIds;
+            if (!Array.isArray(ids) || !ids.every((n) => Number.isInteger(n))) {
+                return res.status(400).json({ error: "trackIds must be an array of integers" });
+            }
+            const requester = req.body?.requester || "Web";
+            const tracks = ids.map((id) => lib.getById(id)).filter(Boolean);
+            if (!tracks.length) return res.status(404).json({ error: "No valid tracks found" });
+            if (!pc) return res.status(503).json({ error: "Player controller not available" });
+            await pc.enqueue(tracks, requester);
+            res.json({ ok: true, count: tracks.length });
         } catch (e) { res.status(400).json({ error: e.message }); }
     });
 
