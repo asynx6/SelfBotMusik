@@ -557,6 +557,32 @@ test("15. QUEUE loop + single unplayable track: stops cleanly instead of infinit
     assert(controller.lastError !== null, "lastError should record the skip");
 });
 
+test("17. stop() drops the engine: next enqueue re-runs the factory and plays", async () => {
+    let lavalinkCreated = 0;
+    let lavalinkEngine = null;
+
+    const controller = new PlayerController({
+        createLavalinkEngine: () => {
+            lavalinkCreated++;
+            lavalinkEngine = new MockEngine("lavalink");
+            return lavalinkEngine;
+        }
+    });
+
+    await controller.enqueue([{ title: "T1", uri: "https://yt.com/1" }], "user");
+    assert.equal(lavalinkCreated, 1);
+
+    await controller.stop();
+    assert.equal(controller.currentEngine, null, "Engine should be dropped on stop");
+    assert.equal(controller.currentEngineType, null);
+
+    // /api/stop (pc path) also tears down the Poru player via leaveVC —
+    // the next play must re-run the factory to rejoin, not reuse the engine.
+    await controller.enqueue([{ title: "T2", uri: "https://yt.com/2" }], "user");
+    assert.equal(lavalinkCreated, 2, "Factory must re-run after stop");
+    assert.equal(lavalinkEngine.playedTrack.title, "T2", "Playback should work after stop");
+});
+
 test("16. Handoff lavalink -> local -> lavalink: factory re-runs and second lavalink track plays", async () => {
     const tmpDir = createTempDir();
     const localFile = path.join(tmpDir, "library", "mid.mp3");

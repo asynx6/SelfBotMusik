@@ -314,6 +314,10 @@ class PlayerController extends EventEmitter {
             if (this.currentEngine && typeof this.currentEngine.stop === "function") {
                 await this.currentEngine.stop();
             }
+            // Drop the engine too: /api/stop tears down the Poru player
+            // (leaveVC), so the next play must re-run the factory and rejoin.
+            this.currentEngine = null;
+            this.currentEngineType = null;
         } finally {
             this.currentIndex = -1;
             this.queue = [];
