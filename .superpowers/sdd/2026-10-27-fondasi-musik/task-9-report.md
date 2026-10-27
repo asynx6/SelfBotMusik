@@ -32,6 +32,11 @@
 - `node --test test/state-compat.test.js` — 4/4 pass.
 - `npm test` — 75/75 pass, no regressions.
 
+## Fix Round 1 (commit `a7e81f9`)
+- [Important] Removed the `|| playerController.currentEngineType === "local"` override from the `wireSafetyEvents` `intentionalDisconnect` getter — genuine voice drops during Local playback now trigger `tryReconnectVC` again. Handoff marking via `onIntentionalDisconnect` stays.
+- Engine-aware branch in `tryReconnectVC` is now reachable: `await eng._ensureVoiceConnection()` (no unhandled rejection); `reconnectAttempts = 0` only after success, so backoff applies to failed Local rejoins.
+- Verified: `node --check index.js` OK; state-compat 4/4; `npm test` 75/75.
+
 ## Concerns
 1. **LocalEngine rejoin heuristic**: the `intentionalDisconnect` getter returning true while LocalEngine is active is a blunt instrument — a genuine (unintentional) drop during Local playback will skip auto-rejoin once. LocalEngine's own connection recovery usually covers it; revisit if drops during local playback are observed in practice.
 2. **`getVoiceTarget` is unused by PlayerController internals currently** (kept for interface compatibility per spec).
