@@ -10,13 +10,21 @@ class LavalinkEngine extends BaseEngine {
         this.guildId = guildId;
 
         this._listenersWired = false;
+        this._trackEnded = false;
         this._activePlayer = null;
         this._onTrackEnd = null;
+        this._onQueueEnd = null;
         this._onTrackError = null;
         this._onTrackStuck = null;
         this._onPlayerTrackEnd = null;
         this._onPlayerTrackError = null;
         this._onPlayerTrackStuck = null;
+    }
+
+    _emitEnd(reason = "finished") {
+        if (this._trackEnded) return;
+        this._trackEnded = true;
+        this.emit("end", { reason });
     }
 
     _getPlayer() {
@@ -31,7 +39,12 @@ class LavalinkEngine extends BaseEngine {
             this._onTrackEnd = (p, track, data) => {
                 if (p?.guildId && p.guildId !== this.guildId) return;
                 const reason = data?.reason || track?.reason || "finished";
-                this.emit("end", { reason });
+                this._emitEnd(reason);
+            };
+
+            this._onQueueEnd = (p) => {
+                if (p?.guildId && p.guildId !== this.guildId) return;
+                this._emitEnd("finished");
             };
 
             this._onTrackError = (p, track, data) => {
@@ -46,6 +59,7 @@ class LavalinkEngine extends BaseEngine {
             };
 
             this.poru.on("trackEnd", this._onTrackEnd);
+            this.poru.on("queueEnd", this._onQueueEnd);
             this.poru.on("trackError", this._onTrackError);
             this.poru.on("trackStuck", this._onTrackStuck);
         }
@@ -55,9 +69,8 @@ class LavalinkEngine extends BaseEngine {
             this._activePlayer = player;
 
             this._onPlayerTrackEnd = (track, data) => {
-                // If poru already handled it, skip duplicate
                 const reason = (data && data.reason) || (track && track.reason) || "finished";
-                this.emit("end", { reason });
+                this._emitEnd(reason);
             };
 
             this._onPlayerTrackError = (track, data) => {
@@ -88,6 +101,7 @@ class LavalinkEngine extends BaseEngine {
                     : null;
             if (remove) {
                 if (this._onTrackEnd) remove("trackEnd", this._onTrackEnd);
+                if (this._onQueueEnd) remove("queueEnd", this._onQueueEnd);
                 if (this._onTrackError) remove("trackError", this._onTrackError);
                 if (this._onTrackStuck) remove("trackStuck", this._onTrackStuck);
             }
@@ -127,6 +141,7 @@ class LavalinkEngine extends BaseEngine {
         }
 
         this._setupListeners(player);
+        this._trackEnded = false;
 
         let track;
         if (trackRow.encoded || trackRow.track) {

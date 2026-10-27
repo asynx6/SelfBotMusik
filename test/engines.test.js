@@ -118,6 +118,39 @@ test("LavalinkEngine: play delegates to Poru player and wires trackEnd/trackErro
     assert.equal(stuckEmitted.thresholdMs, 12000);
 });
 
+test("LavalinkEngine: queueEnd on Poru emits 'end' and deduplicates with trackEnd", async () => {
+    const mockPoru = new EventEmitter();
+    mockPoru.players = new Map();
+
+    const mockPlayer = new EventEmitter();
+    mockPlayer.guildId = "g1";
+    mockPlayer.queue = [];
+    mockPlayer.queue.add = function (t) { this.push(t); };
+    mockPlayer.play = async () => {};
+
+    mockPoru.players.set("g1", mockPlayer);
+
+    const engine = new LavalinkEngine({ poru: mockPoru, guildId: "g1" });
+    let endCount = 0;
+    let lastEndReason = null;
+    engine.on("end", (evt) => {
+        endCount++;
+        lastEndReason = evt.reason;
+    });
+
+    await engine.play({ title: "Solo Track", source_type: "lavalink", uri: "https://example.com" });
+
+    // When solo track ends in Poru, queue.length is 0 so Poru emits queueEnd
+    mockPoru.emit("queueEnd", mockPlayer);
+    assert.equal(endCount, 1);
+    assert.equal(lastEndReason, "finished");
+
+    // If trackEnd or another queueEnd also fires, deduplication prevents duplicate 'end'
+    mockPoru.emit("trackEnd", mockPlayer, null, { reason: "finished" });
+    mockPoru.emit("queueEnd", mockPlayer);
+    assert.equal(endCount, 1);
+});
+
 test("LavalinkEngine: pause, resume, stop, setVolume, getPositionMs delegate to player", async () => {
     const mockPoru = new EventEmitter();
     mockPoru.players = new Map();
