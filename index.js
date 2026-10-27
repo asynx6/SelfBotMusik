@@ -109,7 +109,7 @@ async function tryReconnectVC(reason) {
         // LavalinkEngine rejoins through Poru (leaveVC + joinVC below).
         const eng = playerController?.currentEngine;
         if (playerController && playerController.currentEngineType === "local" && eng?._ensureVoiceConnection) {
-            eng._ensureVoiceConnection();
+            await eng._ensureVoiceConnection();
             reconnectAttempts = 0;
             console.log("✅ Auto-rejoin successful (LocalEngine)");
             return;
@@ -431,18 +431,9 @@ discordMod.wireSafetyEvents(client, {
     guildId: runtimeMod.Runtime.guildId,
     tryReconnectVC,
     resetReconnects,
-    // Engine-aware: when PlayerController owns an engine, engine handoffs
-    // set intentionalDisconnect — respect it so auto-rejoin doesn't fight
-    // the controller's engine switch (Local joins its own VC).
-    get intentionalDisconnect() {
-        if (playerController && playerController.currentEngine) {
-            // Active engine exists: only Lavalink handoffs use Poru's VC.
-            // LocalEngine manages its own connection, so treat any drop
-            // during LocalEngine playback as intentional unless it wasn't.
-            return intentionalDisconnect || playerController.currentEngineType === "local";
-        }
-        return intentionalDisconnect;
-    },
+    // Engine handoffs mark the flag via onIntentionalDisconnect (PlayerController);
+    // genuine drops must still trigger auto-rejoin, so the getter stays plain.
+    get intentionalDisconnect() { return intentionalDisconnect; },
     set intentionalDisconnect(v) { intentionalDisconnect = v; },
 });
 
