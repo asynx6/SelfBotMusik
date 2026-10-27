@@ -251,6 +251,10 @@ function createDownloadManager({
                     diskUsage = { bytes: 0 };
                 }
 
+                // Check if canceled or modified while awaiting diskUsage
+                const current = getById(queuedRow.id);
+                if (!current || current.status !== "queued") continue;
+
                 const quotaGb = parseFloat(getSetting("library_quota_gb", "10")) || 10;
                 const quotaBytes = quotaGb * 1024 * 1024 * 1024;
 
@@ -291,9 +295,13 @@ function createDownloadManager({
     }
 
     function startSpawn(task) {
+        if (task.canceled) return;
+
         const ytdlpPath = getSetting("ytdlp_path", "yt-dlp");
         const outTemplate = path.join(tmpDir, `${task.id}.%(ext)s`);
         const args = ["-f", "bestaudio/best", "--no-playlist", "--no-part", "-o", outTemplate, task.uri];
+
+        let failureHandled = false;
 
         let child;
         try {
@@ -344,12 +352,14 @@ function createDownloadManager({
         }
 
         child.on("error", (err) => {
-            if (task.canceled) return;
+            if (task.canceled || failureHandled) return;
+            failureHandled = true;
             handleSpawnFailure(task, err.message || "yt-dlp child error");
         });
 
         child.on("close", (code, signal) => {
-            if (task.canceled) return;
+            if (task.canceled || failureHandled) return;
+            failureHandled = true;
             if (code === 0) {
                 handleSpawnSuccess(task);
             } else {

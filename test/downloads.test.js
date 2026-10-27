@@ -145,6 +145,25 @@ function createFakeChild() {
     return child;
 }
 
+function waitForCondition(checkFn, timeoutMs = 3000, intervalMs = 10) {
+    const start = Date.now();
+    return new Promise((resolve, reject) => {
+        function tick() {
+            try {
+                const res = checkFn();
+                if (res) return resolve(res);
+            } catch (err) {
+                return reject(err);
+            }
+            if (Date.now() - start >= timeoutMs) {
+                return reject(new Error(`Timed out waiting for condition after ${timeoutMs}ms`));
+            }
+            setTimeout(tick, intervalMs);
+        }
+        tick();
+    });
+}
+
 test("1. enqueue creates queued row and activeForTrack returns it", () => {
     const env = setupTestEnvironment();
     try {
@@ -247,8 +266,8 @@ test("4. concurrency limit restricts active yt-dlp processes", async () => {
 
         manager.enqueue([track1.id, track2.id]);
 
-        // Wait for event loop ticks so processQueue starts first task
-        await new Promise((r) => setTimeout(r, 50));
+        // Wait until first task spawns
+        await waitForCondition(() => activeChildren.length === 1);
 
         assert.equal(activeChildren.length, 1);
         assert.equal(totalSpawns, 1);
@@ -258,8 +277,8 @@ test("4. concurrency limit restricts active yt-dlp processes", async () => {
         firstChild.emit("close", 0, null);
         firstChild.emit("exit", 0, null);
 
-        // Wait for queue tick to trigger second task
-        await new Promise((r) => setTimeout(r, 50));
+        // Wait until second task spawns
+        await waitForCondition(() => activeChildren.length === 2);
 
         assert.equal(activeChildren.length, 2);
         assert.equal(totalSpawns, 2);
@@ -296,8 +315,11 @@ test("5. retry: failure once retries; failure twice sets failed with error", asy
 
         manager.enqueue(track.id);
 
-        // Wait for retry cycle
-        await new Promise((r) => setTimeout(r, 100));
+        // Wait until download reaches terminal state 'failed'
+        await waitForCondition(() => {
+            const row = manager.list()[0];
+            return row && row.status === "failed";
+        });
 
         assert.equal(spawnCount, 2); // Initial attempt + 1 retry
         const dl = manager.list()[0];
@@ -331,10 +353,10 @@ test("6. success updates progress, writes file, calls attachFile with sha256 and
                     fs.mkdirSync(path.dirname(tmpFile), { recursive: true });
                     fs.writeFileSync(tmpFile, dummyAudio);
 
-                    setTimeout(() => {
+                    setImmediate(() => {
                         child.emit("close", 0, null);
                         child.emit("exit", 0, null);
-                    }, 20);
+                    });
                 });
                 return child;
             },
@@ -350,8 +372,11 @@ test("6. success updates progress, writes file, calls attachFile with sha256 and
         const rows = manager.enqueue(track.id);
         const dlId = rows[0].id;
 
-        // Wait for download completion
-        await new Promise((r) => setTimeout(r, 100));
+        // Wait until download reaches terminal state 'done'
+        await waitForCondition(() => {
+            const row = manager.getById(dlId);
+            return row && row.status === "done";
+        });
 
         const finalDl = manager.getById(dlId);
         assert.equal(finalDl.status, "done");
@@ -398,7 +423,7 @@ test("7. cancel active spawn calls kill and sets canceled status", async () => {
         const rows = manager.enqueue(track.id);
         const dlId = rows[0].id;
 
-        await new Promise((r) => setTimeout(r, 30));
+        await waitForCondition(() => childProcess !== undefined);
 
         assert.ok(childProcess);
         assert.equal(childProcess.killed, undefined);
@@ -444,7 +469,10 @@ test("8. quota exceeded fails task immediately without spawning yt-dlp", async (
         const rows = manager.enqueue(track.id);
         const dlId = rows[0].id;
 
-        await new Promise((r) => setTimeout(r, 50));
+        await waitForCondition(() => {
+            const row = manager.getById(dlId);
+            return row && row.status === "failed";
+        });
 
         assert.equal(spawnCalls, 0);
         const failedRow = manager.getById(dlId);
@@ -481,18 +509,24 @@ test("9. cancel queued task before it starts running cancels and prevents spawn"
         const [r1, r2] = manager.enqueue([track1.id, track2.id]);
         assert.equal(r2.status, "queued");
 
+        // Wait until task 1 spawns
+        await waitForCondition(() => child1 !== undefined);
+
         // Cancel r2 while still queued
         const res = manager.cancel(r2.id);
         assert.deepEqual(res, { ok: true });
         assert.equal(manager.getById(r2.id).status, "canceled");
 
         // Finish track 1
-        await new Promise((r) => setTimeout(r, 20));
         child1.emit("close", 0, null);
         child1.emit("exit", 0, null);
 
-        // Wait for queue processing to verify track 2 is not spawned
-        await new Promise((r) => setTimeout(r, 50));
+        // Wait until track 1 settles
+        await waitForCondition(() => {
+            const row = manager.getById(r1.id);
+            return row && ["done", "failed"].includes(row.status);
+        });
+
         assert.equal(spawnedTrack2, false);
     } finally {
         env.cleanup();
@@ -538,4 +572,88 @@ test("11. default singleton exports all required methods and extends EventEmitte
     assert.equal(typeof downloads.on, "function");
     assert.equal(typeof downloads.emit, "function");
 });
+
+test("12. cancel queued task while diskUsage is awaiting does not spawn or revive task", async () => {
+    const env = setupTestEnvironment();
+    try {
+        let resolveDiskUsage;
+        env.fakeLibrary.diskUsage = () => new Promise((resolve) => {
+            resolveDiskUsage = resolve;
+        });
+
+        let spawnCalls = 0;
+        const manager = createDownloadManager({
+            spawn: () => {
+                spawnCalls++;
+                return createFakeChild();
+            },
+            library: env.fakeLibrary,
+            db: env.fakeDb,
+            dataDir: env.tmpDir,
+        });
+
+        const track = env.addTrack({ title: "Race Cancel Song" });
+        const [row] = manager.enqueue(track.id);
+
+        // Wait until diskUsage hook is active
+        await waitForCondition(() => typeof resolveDiskUsage === "function");
+
+        // Cancel while diskUsage is pending
+        manager.cancel(row.id);
+        assert.equal(manager.getById(row.id).status, "canceled");
+
+        // Now resolve diskUsage
+        resolveDiskUsage({ bytes: 0 });
+
+        // Let processQueue ticks proceed
+        await new Promise((r) => setImmediate(r));
+        await new Promise((r) => setImmediate(r));
+
+        // Verify task was NOT revived to running and spawn was not called
+        assert.equal(manager.getById(row.id).status, "canceled");
+        assert.equal(spawnCalls, 0);
+    } finally {
+        env.cleanup();
+    }
+});
+
+test("13. spawn emitting both 'error' and 'close' does not trigger duplicate failure handling", async () => {
+    const env = setupTestEnvironment();
+    try {
+        const track = env.addTrack({ title: "Error Then Close Song" });
+        let spawnCalls = 0;
+
+        const manager = createDownloadManager({
+            spawn: () => {
+                spawnCalls++;
+                const child = createFakeChild();
+                setImmediate(() => {
+                    // Node.js emits error then close on spawn failure (e.g. missing binary)
+                    child.emit("error", new Error("spawn ENOENT yt-dlp"));
+                    child.emit("close", -2, null);
+                });
+                return child;
+            },
+            library: env.fakeLibrary,
+            db: env.fakeDb,
+            dataDir: env.tmpDir,
+        });
+
+        manager.enqueue(track.id);
+
+        await waitForCondition(() => {
+            const dl = manager.list()[0];
+            return dl && dl.status === "failed";
+        });
+
+        // Initial attempt + exactly 1 retry
+        assert.equal(spawnCalls, 2);
+        const dl = manager.list()[0];
+        assert.equal(dl.status, "failed");
+        assert.ok(dl.error.includes("spawn ENOENT yt-dlp"));
+    } finally {
+        env.cleanup();
+    }
+});
+
 
