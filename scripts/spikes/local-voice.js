@@ -209,7 +209,7 @@ client.once("ready", async () => {
         await shutdown("channel not found");
         return;
     }
-    if (channel.type !== 2) { // ChannelType.GuildVoice = 2
+    if (channel.type !== 2 && channel.type !== "GUILD_VOICE") { // ChannelType.GuildVoice = 2
         console.error(`❌ Channel is not a voice channel: ${channel.type}`);
         await shutdown("not a voice channel");
         return;

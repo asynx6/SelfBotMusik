@@ -337,7 +337,7 @@ try {
             client,
             guildId: runtimeMod.Runtime.guildId,
             channelId: channelId || runtimeMod.Runtime.channelId,
-            ffmpegPath: process.env.FFMPEG_PATH || "ffmpeg",
+            ffmpegPath: process.env.FFMPEG_PATH || db.getSetting("ffmpeg_path") || "ffmpeg",
             dataDir: db.DATA_DIR,
         }),
         db: db.db,
@@ -395,7 +395,12 @@ const ctx = {
     downloads,
     uploads,
     playerController,
-    searchTracks: (query, requester) => playerMod.searchTracks(poru, query, requester),
+    // Adapter: searchTracks returns Poru Track objects ({ track, info }) —
+    // webserver/library expect plain info objects. Flatten + keep encoded for LavalinkEngine.
+    searchTracks: async (query, requester) => {
+        const tracks = await playerMod.searchTracks(poru, query, requester);
+        return tracks.map((t) => ({ ...t.info, encoded: t.track, requester: t.requester }));
+    },
 };
 ctx.wss = null;
 
