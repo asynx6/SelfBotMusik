@@ -128,10 +128,10 @@ class LavalinkEngine extends BaseEngine {
         if (!trackRow) {
             throw new Error("trackRow is required");
         }
-        if (trackRow.file_path) {
+        if (trackRow.file_path && !process.env.STREAM_LOCAL_VIA_LAVALINK) {
             throw new Error("Local tracks not supported by LavalinkEngine; use LocalEngine");
         }
-        if (trackRow.source_type && trackRow.source_type !== "lavalink") {
+        if (trackRow.source_type && trackRow.source_type !== "lavalink" && !trackRow.file_path) {
             throw new Error(`Unsupported source_type: ${trackRow.source_type}; LavalinkEngine requires source_type === 'lavalink'`);
         }
 
@@ -144,7 +144,21 @@ class LavalinkEngine extends BaseEngine {
         this._trackEnded = false;
 
         let track;
-        if (trackRow.encoded || trackRow.track) {
+        if (trackRow.file_path) {
+            // Local file: stream via internal HTTP endpoint for Lavalink to play
+            const baseUrl = process.env.STREAM_BASE_URL || "http://127.0.0.1:3434";
+            track = {
+                info: {
+                    title: trackRow.title || "Unknown",
+                    author: trackRow.artist || trackRow.author || "Unknown",
+                    length: trackRow.duration_ms || trackRow.duration || 0,
+                    identifier: trackRow.identifier || String(trackRow.id),
+                    isSeekable: true,
+                    isStream: true,
+                    uri: `${baseUrl}/api/stream/${trackRow.id}`,
+                }
+            };
+        } else if (trackRow.encoded || trackRow.track) {
             track = {
                 track: trackRow.encoded || trackRow.track,
                 info: {

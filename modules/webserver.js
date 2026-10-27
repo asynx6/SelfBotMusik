@@ -69,9 +69,11 @@ function buildServer(ctx) {
         pending = setTimeout(() => { pending = null; }, 150);
     }
 
-    // --- Auth gate: all /api/* except /api/auth/* need a valid JWT cookie. ---
+    // --- Auth gate: all /api/* except /api/auth/* and /api/stream/* need a valid JWT cookie. ---
     app.use("/api", (req, res, next) => {
         if (req.path.startsWith("/auth/") || req.path === "/auth") return next();
+        // Allow unauthenticated internal audio streaming for local Lavalink
+        if (req.path.startsWith("/stream/")) return next();
         if (auth.verifyToken(req)) return next();
         res.status(401).json({ error: "Unauthorized", unAuthed: true });
     });
@@ -428,6 +430,50 @@ function buildServer(ctx) {
     stateMod.emitter.on("change", onChange);
     // Tick updates from the 500ms position ticker — silent (no log spam).
     stateMod.emitter.on("tick", () => push("tick"));
+
+    // Streaming endpoint for local library files (used by internal Lavalink playback)
+    app.get("/api/stream/:id", (req, res) => {
+        try {
+            const id = Number(req.params.id);
+            if (!Number.isInteger(id)) return res.status(400).send("Invalid track ID");
+            const row = lib.getById(id);
+            if (!row || !row.file_path) return res.status(404).send("File not found");
+            const filePath = lib.resolveFilePath(row.file_path);
+            if (!require("fs").existsSync(filePath)) return res.status(404).send("File missing on disk");
+
+            const fs = require("fs");
+            const stat = fs.statSync(filePath);
+            const fileSize = stat.size;
+            const range = req.headers.range;
+
+            if (range) {
+                const parts = range.replace(/bytes=/, "").split("-");
+                const start = parseInt(parts[0], 10);
+                const end = parts[1] ? parseInt(parts[1], 10) : fileSize - 1;
+                const chunksize = (end - start) + 1;
+                const file = fs.createReadStream(filePath, { start, end });
+                const head = {
+                    "Content-Range": `bytes ${start}-${end}/${fileSize}`,
+                    "Accept-Ranges": "bytes",
+                    "Content-Length": chunksize,
+                    "Content-Type": row.format === "webm" ? "audio/webm" : (row.format === "ogg" || row.format === "opus" ? "audio/ogg" : "audio/mpeg"),
+                };
+                res.writeHead(206, head);
+                file.pipe(res);
+            } else {
+                const head = {
+                    "Content-Length": fileSize,
+                    "Content-Type": row.format === "webm" ? "audio/webm" : (row.format === "ogg" || row.format === "opus" ? "audio/ogg" : "audio/mpeg"),
+                    "Accept-Ranges": "bytes",
+                };
+                res.writeHead(200, head);
+                fs.createReadStream(filePath).pipe(res);
+            }
+        } catch (e) {
+            console.error("api/stream error:", e.message);
+            res.status(500).send("Stream error");
+        }
+    });
 
     return { app, server };
 }

@@ -82,6 +82,7 @@ class PlayerController extends EventEmitter {
     _resolveEngineType(track) {
         if (!track) return null;
 
+        // Priority: LocalEngine for tracks with local files
         if (track.file_path) {
             const fullPath = path.isAbsolute(track.file_path)
                 ? track.file_path
@@ -89,15 +90,10 @@ class PlayerController extends EventEmitter {
             if (fs.existsSync(fullPath)) {
                 return "local";
             }
-            return null; // file_path defined but file not found on disk -> cannot play local or lavalink
+            return null; // file_path defined but file not found on disk -> fallback to Lavalink
         }
 
-        if (typeof this.isLavalinkReady === "function") {
-            if (!this.isLavalinkReady()) return null;
-        } else if (this.isLavalinkReady === false) {
-            return null;
-        }
-
+        // Fallback: Online tracks handled by LavalinkEngine
         if (typeof this.createLavalinkEngine === "function") {
             return "lavalink";
         }
