@@ -209,7 +209,7 @@ class PlayerController extends EventEmitter {
             this.lastError = new Error(`No available engine for track: ${item.track?.title || "Unknown"}`);
             this._logAudit("track_skip", this.lastError.message);
             this._emitState();
-            return await this.next();
+            return await this._skipForward();
         }
 
         try {
@@ -242,7 +242,25 @@ class PlayerController extends EventEmitter {
             this.lastError = err;
             this._logAudit("track_error", err?.message || String(err));
             this._emitState();
-            return await this.next();
+            return await this._skipForward();
+        }
+    }
+
+    // Skip past the current track, bypassing TRACK loop so an unplayable
+    // track can't recurse playCurrent -> next -> playCurrent forever.
+    async _skipForward() {
+        if (this.queue.length === 0) {
+            await this.stop();
+            return;
+        }
+        this.currentIndex++;
+        if (this.currentIndex < this.queue.length) {
+            await this.playCurrent();
+        } else if (this.loop === LOOP_MODES.QUEUE) {
+            this.currentIndex = 0;
+            await this.playCurrent();
+        } else {
+            await this.stop();
         }
     }
 
@@ -353,7 +371,7 @@ class PlayerController extends EventEmitter {
         if (!Number.isInteger(idx) || idx < 0 || idx >= this.queue.length) {
             throw new Error("Index out of range");
         }
-        if (idx === 0 || idx === this.currentIndex) {
+        if (idx === this.currentIndex) {
             throw new Error("Cannot remove currently playing track");
         }
         const [removed] = this.queue.splice(idx, 1);

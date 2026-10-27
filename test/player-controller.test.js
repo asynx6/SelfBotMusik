@@ -463,3 +463,52 @@ test("11. playCurrent updates play_count and last_played_at in database", async 
     assert(dbUpdates[0].sql.includes("UPDATE tracks SET play_count = play_count + 1"));
     assert.equal(dbUpdates[0].args[1], 42); // track.id
 });
+
+test("12. TRACK loop with unplayable track: skips forward instead of infinite loop", async () => {
+    const tmpDir = createTempDir();
+    const brokenFile = path.join(tmpDir, "library", "1.mp3"); // file_path set but missing on disk
+
+    let lavalinkEngine = null;
+    const controller = new PlayerController({
+        dataDir: tmpDir,
+        createLavalinkEngine: () => {
+            lavalinkEngine = new MockEngine("lavalink");
+            return lavalinkEngine;
+        }
+    });
+
+    controller.setLoop(1); // TRACK
+
+    const unplayable = { title: "Broken", file_path: "1.mp3" }; // file missing on disk
+    const ok = { title: "Good Song", uri: "https://yt.com/good" };
+    await controller.enqueue([unplayable, ok], "user");
+
+    assert.equal(controller.currentIndex, 1, "Unplayable track should be skipped forward even in TRACK loop");
+    assert.equal(lavalinkEngine.playedTrack.title, "Good Song");
+
+    fs.rmSync(tmpDir, { recursive: true, force: true });
+});
+
+test("13. removeAt(0) is legal when track 0 is not currently playing", async () => {
+    let lavalinkEngine = null;
+    const controller = new PlayerController({
+        createLavalinkEngine: () => {
+            lavalinkEngine = new MockEngine("lavalink");
+            return lavalinkEngine;
+        }
+    });
+
+    const t1 = { title: "T1", uri: "https://yt.com/1" };
+    const t2 = { title: "T2", uri: "https://yt.com/2" };
+    const t3 = { title: "T3", uri: "https://yt.com/3" };
+    await controller.enqueue([t1, t2, t3], "user");
+
+    await controller.jumpTo(2);
+    assert.equal(controller.currentIndex, 2);
+
+    controller.removeAt(0);
+    assert.equal(controller.queue.length, 2);
+    assert.equal(controller.queue[0].track.title, "T2");
+    assert.equal(controller.currentIndex, 1, "Current index shifts down when an earlier track is removed");
+    assert.equal(lavalinkEngine.playedTrack.title, "T3");
+});
