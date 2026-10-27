@@ -539,3 +539,20 @@ test("14. TRACK loop with track erroring mid-playback: skips forward instead of 
     assert.equal(lavalinkEngine.playedTrack.title, "Good Song");
     assert(controller.lastError !== null, "lastError should be set");
 });
+
+test("15. QUEUE loop + single unplayable track: stops cleanly instead of infinite recursion", async () => {
+    const controller = new PlayerController({
+        isLavalinkReady: () => false,
+        createLavalinkEngine: () => null,
+        createLocalEngine: () => new MockEngine("local")
+    });
+
+    controller.setLoop(2); // QUEUE
+
+    const unplayable = { title: "Broken Only Track", uri: "https://yt.com/broken" };
+    await controller.enqueue([unplayable], "user");
+
+    assert.equal(controller.currentIndex, -1, "Should stop cleanly");
+    assert.equal(controller.queue.length, 0);
+    assert(controller.lastError !== null, "lastError should record the skip");
+});

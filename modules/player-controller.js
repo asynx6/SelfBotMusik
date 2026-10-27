@@ -146,14 +146,14 @@ class PlayerController extends EventEmitter {
             if (this._stopping || this.currentEngine !== engine) return;
             this.lastError = err;
             this._logAudit("track_error", err?.message || String(err));
-            await this._skipForward();
+            await this._skipForward(this.queue[this.currentIndex]);
         });
 
         engine.on("stuck", async (data) => {
             if (this._stopping || this.currentEngine !== engine) return;
             this.lastError = new Error("Track stuck in playback");
             this._logAudit("track_stuck", data ? JSON.stringify(data) : "Track stuck");
-            await this._skipForward();
+            await this._skipForward(this.queue[this.currentIndex]);
         });
     }
 
@@ -209,7 +209,7 @@ class PlayerController extends EventEmitter {
             this.lastError = new Error(`No available engine for track: ${item.track?.title || "Unknown"}`);
             this._logAudit("track_skip", this.lastError.message);
             this._emitState();
-            return await this._skipForward();
+            return await this._skipForward(item);
         }
 
         try {
@@ -242,13 +242,15 @@ class PlayerController extends EventEmitter {
             this.lastError = err;
             this._logAudit("track_error", err?.message || String(err));
             this._emitState();
-            return await this._skipForward();
+            return await this._skipForward(item);
         }
     }
 
     // Skip past the current track, bypassing TRACK loop so an unplayable
     // track can't recurse playCurrent -> next -> playCurrent forever.
-    async _skipForward() {
+    // failedItem guards the QUEUE-loop wrap: if the wrap lands back on the
+    // item that just failed (e.g. single-track queue), stop instead of looping.
+    async _skipForward(failedItem = null) {
         if (this.queue.length === 0) {
             await this.stop();
             return;
@@ -257,6 +259,10 @@ class PlayerController extends EventEmitter {
         if (this.currentIndex < this.queue.length) {
             await this.playCurrent();
         } else if (this.loop === LOOP_MODES.QUEUE) {
+            if (failedItem && this.queue[0] === failedItem) {
+                await this.stop();
+                return;
+            }
             this.currentIndex = 0;
             await this.playCurrent();
         } else {
