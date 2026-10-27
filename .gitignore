@@ -15,6 +15,7 @@ pnpm-debug.log*
 dist/
 build/
 coverage/
+.superpowers/
 
 # --- Editor / OS ---
 .idea/

@@ -30,6 +30,7 @@ process.on("unhandledRejection", (reason) => {
 });
 
 const db = require("./modules/database");
+
 const cfgMod = require("./modules/config");
 const runtimeMod = require("./modules/runtime");
 const auth = require("./modules/auth");
@@ -38,6 +39,12 @@ const discordMod = require("./modules/discord");
 const poruMod = require("./modules/poru-manager");
 const playerMod = require("./modules/player");
 const webMod = require("./modules/webserver");
+const library = require("./modules/library");
+const downloads = require("./modules/downloads");
+const uploads = require("./modules/uploads");
+const PlayerController = require("./modules/player-controller");
+const { LavalinkEngine } = require("./modules/engines/lavalink");
+const { LocalEngine } = require("./modules/engines/local");
 
 auth.seedDefaultUser();
 
@@ -97,6 +104,16 @@ async function tryReconnectVC(reason) {
     reconnectAttempts++;
     console.log(`🔧 Auto-rejoin VC attempt #${reconnectAttempts} (${reason})`);
     try {
+        // Engine-aware rejoin: LocalEngine owns its own voice connection
+        // (via @discordjs/voice) — just re-run its connection setup.
+        // LavalinkEngine rejoins through Poru (leaveVC + joinVC below).
+        const eng = playerController?.currentEngine;
+        if (playerController && playerController.currentEngineType === "local" && eng?._ensureVoiceConnection) {
+            eng._ensureVoiceConnection();
+            reconnectAttempts = 0;
+            console.log("✅ Auto-rejoin successful (LocalEngine)");
+            return;
+        }
         await leaveVC(true);
         await new Promise((r) => setTimeout(r, 800));
         const rt = RuntimeSnapshot();
@@ -261,6 +278,18 @@ async function leaveVC(force = false, intentional = false) {
 }
 
 function syncStateFromPlayer() {
+    if (playerController) {
+        const snap = playerController.getSnapshot();
+        stateMod.patch({
+            playing: snap.playing || null,
+            queue: Array.isArray(snap.queue) ? snap.queue : [],
+            paused: !!snap.paused,
+            volume: Number.isFinite(snap.volume) ? snap.volume : 100,
+            loop: Number.isFinite(snap.loop) ? snap.loop : 0,
+            position: Number.isFinite(snap.position) ? snap.position : 0,
+        });
+        return;
+    }
     const rt = RuntimeSnapshot();
     const player = poru.players.get(rt.guildId);
     const queue = [];
@@ -288,6 +317,33 @@ function serializeTrack(t, isCurrent) {
 }
 function stopAll() { return playerMod.stopAll(poru, runtimeMod.Runtime); }
 function broadcastNow() { stateMod.emitter.emit("change"); }
+
+// === Unified PlayerController (task 9) ===
+let playerController = null;
+try {
+    playerController = new PlayerController({
+        library,
+        createLavalinkEngine: () => new LavalinkEngine({ poru, guildId: runtimeMod.Runtime.guildId }),
+        createLocalEngine: () => new LocalEngine({
+            client,
+            guildId: runtimeMod.Runtime.guildId,
+            channelId: runtimeMod.Runtime.channelId,
+            ffmpegPath: process.env.FFMPEG_PATH || "ffmpeg",
+            dataDir: db.DATA_DIR,
+        }),
+        db: db.db,
+        dataDir: db.DATA_DIR,
+        getVoiceTarget: () => ({ guildId: runtimeMod.Runtime.guildId, channelId: runtimeMod.Runtime.channelId }),
+        // Engine handoff: controller tears down the old engine — mark the
+        // disconnect intentional so safety auto-rejoin doesn't interfere.
+        onIntentionalDisconnect: (v) => { intentionalDisconnect = !!v; },
+        isLavalinkReady: () => !!stateMod.State.connected,
+    });
+    playerController.on("state", () => broadcastNow());
+} catch (e) {
+    console.error("⚠️  PlayerController init failed, falling back to legacy player:", e.message);
+    playerController = null;
+}
 
 const ctx = {
     RuntimeSnapshot,
@@ -326,6 +382,11 @@ const ctx = {
         patch: stateMod.patch,
     }),
     State: stateMod.State,
+    library,
+    downloads,
+    uploads,
+    playerController,
+    searchTracks: (query, requester) => playerMod.searchTracks(poru, query, requester),
 };
 ctx.wss = null;
 
@@ -370,7 +431,18 @@ discordMod.wireSafetyEvents(client, {
     guildId: runtimeMod.Runtime.guildId,
     tryReconnectVC,
     resetReconnects,
-    get intentionalDisconnect() { return intentionalDisconnect; },
+    // Engine-aware: when PlayerController owns an engine, engine handoffs
+    // set intentionalDisconnect — respect it so auto-rejoin doesn't fight
+    // the controller's engine switch (Local joins its own VC).
+    get intentionalDisconnect() {
+        if (playerController && playerController.currentEngine) {
+            // Active engine exists: only Lavalink handoffs use Poru's VC.
+            // LocalEngine manages its own connection, so treat any drop
+            // during LocalEngine playback as intentional unless it wasn't.
+            return intentionalDisconnect || playerController.currentEngineType === "local";
+        }
+        return intentionalDisconnect;
+    },
     set intentionalDisconnect(v) { intentionalDisconnect = v; },
 });
 
