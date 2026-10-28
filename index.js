@@ -45,6 +45,7 @@ const uploads = require("./modules/uploads");
 const playlists = require("./modules/playlists");
 const likes = require("./modules/likes");
 const history = require("./modules/history");
+const recommendations = require("./modules/recommendations");
 const PlayerController = require("./modules/player-controller");
 const { LavalinkEngine } = require("./modules/engines/lavalink");
 const { LocalEngine } = require("./modules/engines/local");
@@ -352,6 +353,10 @@ try {
         isLavalinkReady: () => !!stateMod.State.connected,
     });
     playerController.on("state", () => broadcastNow());
+    // Autoplay provider: when queue exhausts, recommend from library
+    playerController.setAutoplayProvider((lastTrack) =>
+        recommendations.onTrackEnd(lastTrack, playerController)
+    );
 } catch (e) {
     console.error("⚠️  PlayerController init failed, falling back to legacy player:", e.message);
     playerController = null;
@@ -400,6 +405,7 @@ const ctx = {
     playlists,
     likes,
     history,
+    recommendations,
     playerController,
     // Adapter: searchTracks returns Poru Track objects ({ track, info }) —
     // webserver/library expect plain info objects. Flatten + keep encoded for LavalinkEngine.

@@ -55,7 +55,8 @@ class PlayerController extends EventEmitter {
         dataDir,
         getVoiceTarget,
         onIntentionalDisconnect,
-        isLavalinkReady
+        isLavalinkReady,
+        autoplayEnabled
     } = {}) {
         super();
         this.library = library || null;
@@ -66,6 +67,8 @@ class PlayerController extends EventEmitter {
         this.getVoiceTarget = getVoiceTarget || null;
         this.onIntentionalDisconnect = onIntentionalDisconnect || null;
         this.isLavalinkReady = isLavalinkReady || null;
+        this.autoplayEnabled = autoplayEnabled !== false; // default: true
+        this._onTrackEndAutoplay = null; // Set externally via setAutoplayProvider()
 
         this.queue = [];
         this.currentIndex = -1;
@@ -99,6 +102,10 @@ class PlayerController extends EventEmitter {
         }
 
         return null;
+    }
+
+    setAutoplayProvider(providerFn) {
+        this._onTrackEndAutoplay = typeof providerFn === "function" ? providerFn : null;
     }
 
     _logAudit(event, detail) {
@@ -291,6 +298,21 @@ class PlayerController extends EventEmitter {
         if (this.currentIndex < this.queue.length) {
             await this.playCurrent();
         } else {
+            // Queue exhausted — try autoplay before stopping
+            if (this.autoplayEnabled && this._onTrackEndAutoplay) {
+                const lastTrack = this.queue[this.currentIndex - 1]?.track || null;
+                try {
+                    const nextTrack = await this._onTrackEndAutoplay(lastTrack);
+                    if (nextTrack) {
+                        await this.playNext([nextTrack], "Autoplay");
+                        this.currentIndex++;
+                        await this.playCurrent();
+                        return;
+                    }
+                } catch (e) {
+                    console.error("Autoplay error:", e.message);
+                }
+            }
             await this.stop();
         }
     }

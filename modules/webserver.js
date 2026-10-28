@@ -16,6 +16,7 @@ const uploads = require("./uploads");
 const playlists = require("./playlists");
 const likes = require("./likes");
 const history = require("./history");
+const recommendations = require("./recommendations");
 
 // Serialize a DB track row for API responses, adding downloaded/downloading flags.
 function serializeApiTrack(track) {
@@ -53,6 +54,7 @@ function buildServer(ctx) {
     const pl = ctx.playlists || playlists;
     const lk = ctx.likes || likes;
     const hist = ctx.history || history;
+    const rec = ctx.recommendations || recommendations;
 
     // Send a snapshot to all WS clients. The browser only redraws when
     // the payload changes — we don't need to log every heartbeat.
@@ -552,6 +554,34 @@ function buildServer(ctx) {
             const limit = parseInt(req.query.limit, 10);
             const offset = parseInt(req.query.offset, 10);
             res.json(hist.listHistory({ limit, offset }));
+        } catch (e) { res.status(400).json({ error: e.message }); }
+    });
+
+    // === Tahap 4: Autoplay & Recommendations API ===
+    app.get("/api/recommendations", async (req, res) => {
+        try {
+            const limit = parseInt(req.query.limit, 10) || 10;
+            const currentTrackId = req.query.currentTrackId ? Number(req.query.currentTrackId) : null;
+            const currentTrack = currentTrackId ? lib.getById(currentTrackId) : null;
+            const recs = await rec.getRecommendations(currentTrack, { limit });
+            res.json({ recommendations: recs });
+        } catch (e) { res.status(400).json({ error: e.message }); }
+    });
+
+    app.post("/api/autoplay", async (req, res) => {
+        try {
+            if (!pc) return res.status(503).json({ error: "Player controller not available" });
+            const enable = req.body?.enabled;
+            if (typeof enable === "boolean") {
+                pc.autoplayEnabled = enable;
+                return res.json({ ok: true, autoplayEnabled: pc.autoplayEnabled });
+            }
+            // Manual trigger: queue one recommendation
+            const currentTrack = stateMod.State.playing;
+            const nextTrack = await rec.getAutoplayRecommendations(currentTrack ? { id: currentTrack.id, title: currentTrack.title, artist: currentTrack.author } : null, { count: 1 });
+            if (!nextTrack.length) return res.status(404).json({ error: "No recommendations available" });
+            await pc.playNext(nextTrack, "Autoplay");
+            res.json({ ok: true, queued: nextTrack });
         } catch (e) { res.status(400).json({ error: e.message }); }
     });
 
