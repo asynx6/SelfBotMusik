@@ -130,6 +130,7 @@ class PlayerController extends EventEmitter {
             try {
                 if (track.id) {
                     this.db.prepare("UPDATE tracks SET play_count = play_count + 1, last_played_at = ? WHERE id = ?").run(now, track.id);
+                    this.db.prepare("INSERT INTO history (track_id, played_at, ms_played) VALUES (?, ?, 0)").run(track.id, now);
                 } else if (track.source_key) {
                     this.db.prepare("UPDATE tracks SET play_count = play_count + 1, last_played_at = ? WHERE source_key = ?").run(now, track.source_key);
                 }
