@@ -95,9 +95,135 @@ function buildServer(ctx) {
     // --- Login + static files serving. ---
     app.get("/login", (req, res) => {
         if (auth.verifyToken(req)) return res.redirect("/");
-        res.sendFile(path.join(__dirname, "..", "public", "login.html"));
+        res.set("Content-Type", "text/html; charset=utf-8");
+        res.send(renderLoginPage());
     });
     app.use(express.static(path.join(__dirname, "..", "public")));
+
+    // JWT-protected login page (served from template, no static file needed)
+    function renderLoginPage() {
+        return `<!doctype html>
+<html lang="en">
+<head>
+    <meta charset="utf-8" />
+    <meta name="viewport" content="width=device-width, initial-scale=1" />
+    <title>SelfBotMusik · Login</title>
+    <meta name="description" content="Sign in to the SelfBotMusik dashboard." />
+    <meta name="theme-color" content="#0e0f12" />
+    <link rel="preconnect" href="https://fonts.googleapis.com" />
+    <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin />
+    <link href="https://fonts.googleapis.com/css2?family=Inter:wght@400;500;600;700;800&family=JetBrains+Mono:wght@500&display=swap" rel="stylesheet" />
+    <style>
+        :root {
+            --bg: #0e0f12;
+            --surface: #181818;
+            --surface-2: #202020;
+            --border: #2a2a2a;
+            --border-strong: #3a3a3a;
+            --text: #ffffff;
+            --text-dim: #a0a0a0;
+            --accent: #ff6b00;
+            --accent-hover: #ff8533;
+        }
+        * { margin: 0; padding: 0; box-sizing: border-box; }
+        body {
+            margin: 0; min-height: 100vh;
+            display: grid; place-items: center;
+            padding: 24px;
+            background:
+                radial-gradient(circle at 20% 20%, rgba(255,255,255,0.04) 0, transparent 40%),
+                radial-gradient(circle at 80% 70%, rgba(255,255,255,0.025) 0, transparent 40%),
+                var(--bg);
+            font-family: 'Inter', system-ui, -apple-system, sans-serif;
+            color: var(--text);
+        }
+        .login-card {
+            width: min(420px, 100%);
+            background: var(--surface);
+            border: 1px solid var(--border);
+            padding: 36px 32px;
+            border-radius: 18px;
+            box-shadow: 0 30px 80px -20px rgba(0,0,0,0.6);
+        }
+        .login-logo {
+            width: 56px; height: 56px;
+            border-radius: 12px;
+            background: linear-gradient(135deg, #ffffff, #c5c8cf);
+            color: #0e0f12;
+            font-size: 28px; font-weight: 800;
+            display: grid; place-items: center;
+            margin-bottom: 18px;
+        }
+        .login-title { font-size: 22px; font-weight: 700; letter-spacing: -0.2px; }
+        .login-sub { color: var(--text-dim); font-size: 13px; margin-top: 4px; }
+        .login-form { margin-top: 24px; }
+        .login-field { margin-bottom: 14px; }
+        .login-field label {
+            display: block; font-size: 11px; color: var(--text-dim);
+            text-transform: uppercase; letter-spacing: 0.8px; margin-bottom: 6px;
+        }
+        .login-field input {
+            width: 100%; height: 46px; padding: 0 14px;
+            background: var(--surface-2); border: 1px solid var(--border-strong);
+            color: var(--text); border-radius: 10px;
+            font-size: 16px; font-family: inherit; outline: none;
+            transition: border-color 0.2s;
+        }
+        .login-field input:focus { border-color: #8a8d96; }
+        .login-btn {
+            width: 100%; height: 48px;
+            background: #ffffff; color: #0e0f12; border: none;
+            border-radius: 10px; font-size: 15px; font-weight: 700;
+            cursor: pointer; transition: opacity 0.2s; margin-top: 8px;
+        }
+        .login-btn:hover { opacity: 0.9; }
+    </style>
+</head>
+<body>
+    <div class="login-card">
+        <div class="login-logo">S</div>
+        <div class="login-title">SelfBotMusik</div>
+        <p class="login-sub">Sign in to your dashboard</p>
+        <form class="login-form" id="loginForm">
+            <div class="login-field">
+                <label>Password</label>
+                <input type="password" name="password" autocomplete="current-password" required placeholder="Enter password" />
+            </div>
+            <button type="submit" class="login-btn">Sign In</button>
+        </form>
+    </div>
+    <script>
+        document.getElementById('loginForm').addEventListener('submit', async (e) => {
+            e.preventDefault();
+            const form = e.target;
+            const btn = form.querySelector('button');
+            const pwd = form.password.value;
+            btn.disabled = true;
+            btn.textContent = 'Signing in...';
+            try {
+                const res = await fetch('/api/auth/login', {
+                    method: 'POST',
+                    headers: { 'Content-Type': 'application/json' },
+                    body: JSON.stringify({ password: pwd })
+                });
+                const data = await res.json();
+                if (res.ok && data.ok) {
+                    window.location.href = '/';
+                } else {
+                    alert(data.error || 'Login failed');
+                    btn.disabled = false;
+                    btn.textContent = 'Sign In';
+                }
+            } catch (err) {
+                alert('Network error: ' + err.message);
+                btn.disabled = false;
+                btn.textContent = 'Sign In';
+            }
+        });
+    </script>
+</body>
+</html>`;
+    }
 
     // === Auth endpoints ===
     app.get("/api/auth/status", (req, res) => {
