@@ -459,9 +459,13 @@ test("11. playCurrent updates play_count and last_played_at in database", async 
     const track = { id: 42, title: "DB Track", uri: "https://yt.com/db" };
     await controller.enqueue([track], "user");
 
-    assert.equal(dbUpdates.length, 1);
-    assert(dbUpdates[0].sql.includes("UPDATE tracks SET play_count = play_count + 1"));
-    assert.equal(dbUpdates[0].args[1], 42); // track.id
+    const playCountUpdate = dbUpdates.find((u) => u.sql.includes("UPDATE tracks SET play_count = play_count + 1"));
+    assert(playCountUpdate, "play_count update should be issued");
+    assert.equal(playCountUpdate.args[1], 42); // track.id
+
+    const historyInsert = dbUpdates.find((u) => u.sql.includes("INSERT INTO history"));
+    assert(historyInsert, "history row should be recorded");
+    assert.equal(historyInsert.args[0], 42); // track.id
 });
 
 test("12. TRACK loop with unplayable track: skips forward instead of infinite loop", async () => {
