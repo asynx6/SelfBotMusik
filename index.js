@@ -463,16 +463,26 @@ discordMod.wireSafetyEvents(client, {
     set intentionalDisconnect(v) { intentionalDisconnect = v; },
     handleChatRequest: async (query, requester) => {
         try {
-            if (playerController) {
-                const tracks = await playerMod.searchTracks(poru, query, requester);
-                if (!tracks || !tracks.length) return { error: "Lagu tidak ditemukan" };
-                for (const t of tracks) library.upsertFromLavalink(t.info);
-                const rows = tracks.map((t) => library.findBySourceKey(`${t.info.sourceName}:${t.info.identifier}`)).filter(Boolean);
-                await playerController.enqueue(rows, requester);
-                return { ok: true, title: rows[0]?.title || query };
+            // Auto-source search: URLs pass through (Spotify/YouTube/SoundCloud);
+            // plain titles try ytsearch then other configured sources.
+            const extraSources = ["ytmsearch", "spsearch", "scsearch"].filter(Boolean);
+            const { tracks, playlistName } = await playerMod.searchTracksAuto(
+                poru, query, requester, extraSources
+            );
+            if (!tracks || !tracks.length) return { error: "Lagu tidak ditemukan" };
+            for (const t of tracks) {
+                try { library.upsertFromLavalink(t.info); } catch {}
             }
-            const res = await ctx.enqueue(query, requester);
-            return { ok: true, title: res?.title || query };
+            const rows = tracks
+                .map((t) => library.findBySourceKey(`${t.info.sourceName}:${t.info.identifier}`))
+                .filter(Boolean);
+            if (!rows.length) return { error: "Gagal menyimpan hasil pencarian" };
+            if (playerController) {
+                await playerController.enqueue(rows, requester);
+            } else {
+                await ctx.enqueue(query, requester);
+            }
+            return { ok: true, title: rows[0]?.title || query, playlistName, count: rows.length };
         } catch (err) {
             return { error: err.message };
         }

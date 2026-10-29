@@ -38,7 +38,7 @@ async function searchTracks(poru, query, requester) {
 
     let q = String(query || "").trim();
     if (/^https?:\/\//i.test(q)) {
-        // pass URL as-is
+        // pass URL as-is (YouTube, Spotify, SoundCloud links resolved by Lavalink plugins)
     } else {
         q = q.replace(/^(ytsearch|ytmsearch|spsearch|dzsearch|amsearch|scsearch):/i, "");
         if (!q) throw new Error("Empty query");
@@ -52,6 +52,48 @@ async function searchTracks(poru, query, requester) {
     if (res.loadType === "search") return [res.tracks[0]];
     if (res.loadType === "playlist") return res.tracks;
     return [];
+}
+
+// --- Search with auto-source fallback (chat requests) ---
+// Tries, in order: the query as-is (URLs pass through), then explicit
+// search prefixes for sources the default search may miss. Returns ALL
+// resolved tracks — playlists return their full track list.
+async function searchTracksAuto(poru, query, requester, extraSources = []) {
+    const attempts = [];
+    if (/^https?:\/\//i.test(query)) {
+        attempts.push({ q: query, source: undefined });
+    } else {
+        const bare = String(query).replace(/^(ytsearch|ytmsearch|spsearch|dzsearch|amsearch|scsearch):/i, "").trim();
+        attempts.push({ q: bare, source: "ytsearch" });
+        for (const src of extraSources) {
+            attempts.push({ q: bare, source: src });
+        }
+    }
+
+    let lastError = null;
+    for (const attempt of attempts) {
+        const node = [...poru.nodes.values()].find((n) => n.isConnected);
+        if (!node) throw new Error("Lavalink node is not connected");
+        try {
+            const res = await poru.resolve({
+                query: attempt.q,
+                ...(attempt.source ? { source: attempt.source } : {}),
+                requester,
+            });
+            if (!res || res.loadType === "empty" || res.loadType === "error") {
+                lastError = new Error("No results");
+                continue;
+            }
+            if (res.loadType === "track") return { tracks: [res.tracks[0]], playlistName: null };
+            if (res.loadType === "search") return { tracks: [res.tracks[0]], playlistName: null };
+            if (res.loadType === "playlist") {
+                return { tracks: res.tracks, playlistName: res.playlist?.name || null };
+            }
+        } catch (e) {
+            lastError = e;
+        }
+    }
+    throw lastError || new Error("No results");
 }
 
 // --- queue-append vs start-fresh logic ---
@@ -217,6 +259,7 @@ module.exports = {
     setLoop,
     enqueue,
     searchTracks,
+    searchTracksAuto,
     skipTrack,
     stopAll,
     togglePause,

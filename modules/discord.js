@@ -75,7 +75,7 @@ function wireSafetyEvents(client, ctx) {
         }, 1500);
     });
 
-    // Chat music request listener: "@bot what if i call" or "@bot song title"
+    // Chat music request listener: "@bot what if i call" / "@bot <spotify playlist url>"
     client.on("messageCreate", async (message) => {
         try {
             // Check if feature is enabled in runtime
@@ -97,17 +97,28 @@ function wireSafetyEvents(client, ctx) {
 
             console.log(`💬 Discord chat music request from ${message.author.tag}: "${content}"`);
 
-            // Execute play request if enqueue or searchTracks is available
+            // The requester must be in the same voice channel as the bot
+            const vcChannelId = runtimeMod.Runtime.channelId;
+            const requesterVoice = message.member?.voice?.channelId;
+            if (!vcChannelId || !stateMod.State.voiceConnected) {
+                try { await message.reply("⚠️ Bot belum terhubung ke voice channel. Hubungkan dulu lewat dashboard."); } catch {}
+                return;
+            }
+            if (requesterVoice !== vcChannelId) {
+                try { await message.reply(`⚠️ Gabung ke voice channel yang sama dengan bot dulu untuk request lagu.`); } catch {}
+                return;
+            }
+
+            // Execute play request
             if (typeof ctx.handleChatRequest === "function") {
                 const res = await ctx.handleChatRequest(content, message.author.tag);
                 if (res?.ok) {
-                    try {
-                        await message.reply(`🎵 Memutar: **${res.title || content}**`);
-                    } catch {}
+                    const detail = res.playlistName
+                        ? `Memutar playlist **${res.playlistName}** (${res.count} lagu)`
+                        : `Memutar: **${res.title || content}**`;
+                    try { await message.reply(`🎵 ${detail}`); } catch {}
                 } else if (res?.error) {
-                    try {
-                        await message.reply(`⚠️ Gagal: ${res.error}`);
-                    } catch {}
+                    try { await message.reply(`⚠️ Gagal: ${res.error}`); } catch {}
                 }
             }
         } catch (e) {
