@@ -15,6 +15,7 @@ function loadRuntime() {
         lavaSecure: String(all.lavalink_secure || "false") === "true",
         guildId: all.guild_id || "",
         channelId: all.channel_id || "",
+        chatRequestsEnabled: String(all.chat_requests_enabled || "false") === "true",
     };
 }
 
@@ -35,6 +36,7 @@ function runtimeToSettingKey(runtimeKey) {
         lavaSecure: "lavalink_secure",
         guildId: "guild_id",
         channelId: "channel_id",
+        chatRequestsEnabled: "chat_requests_enabled",
     };
     return map[runtimeKey] || null;
 }
@@ -51,6 +53,7 @@ function publicConfig(rt) {
         lavaPass: "", // explicitly blank
         hasLavaPass: !!rt.lavaPass,
         lavaSecure: rt.lavaSecure,
+        chatRequestsEnabled: Boolean(rt.chatRequestsEnabled),
     };
 }
 

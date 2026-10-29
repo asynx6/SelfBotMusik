@@ -92,7 +92,7 @@ test("foreign keys are enforced on playlist_tracks / likes / history / downloads
     );
 });
 
-test("ensureDefaults seeds the five foundation settings exactly once", () => {
+test("ensureDefaults seeds the six foundation settings exactly once", () => {
     const db = new Database(":memory:");
     db.pragma("foreign_keys = ON");
     db.exec(SCHEMA_SQL);
@@ -108,11 +108,12 @@ test("ensureDefaults seeds the five foundation settings exactly once", () => {
         library_quota_gb: "10",
         ytdlp_path: "yt-dlp",
         ffmpeg_path: "ffmpeg",
+        chat_requests_enabled: "false",
     });
 
     // Idempotent: a second call must not duplicate rows.
     dbModule.ensureDefaults(db);
-    assert.equal(db.prepare("SELECT COUNT(*) AS c FROM settings").get().c, 5);
+    assert.equal(db.prepare("SELECT COUNT(*) AS c FROM settings").get().c, 6);
 });
 
 test("ensureDefaults never overwrites an existing user value", () => {

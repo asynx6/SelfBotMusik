@@ -107,6 +107,7 @@ const DEFAULT_SETTINGS = {
     library_quota_gb: "10",
     ytdlp_path: "yt-dlp",
     ffmpeg_path: "ffmpeg",
+    chat_requests_enabled: "false",
 };
 
 function ensureDefaults(targetDb = db) {

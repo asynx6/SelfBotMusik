@@ -461,6 +461,22 @@ discordMod.wireSafetyEvents(client, {
     // genuine drops must still trigger auto-rejoin, so the getter stays plain.
     get intentionalDisconnect() { return intentionalDisconnect; },
     set intentionalDisconnect(v) { intentionalDisconnect = v; },
+    handleChatRequest: async (query, requester) => {
+        try {
+            if (playerController) {
+                const tracks = await playerMod.searchTracks(poru, query, requester);
+                if (!tracks || !tracks.length) return { error: "Lagu tidak ditemukan" };
+                for (const t of tracks) library.upsertFromLavalink(t.info);
+                const rows = tracks.map((t) => library.findBySourceKey(`${t.info.sourceName}:${t.info.identifier}`)).filter(Boolean);
+                await playerController.enqueue(rows, requester);
+                return { ok: true, title: rows[0]?.title || query };
+            }
+            const res = await ctx.enqueue(query, requester);
+            return { ok: true, title: res?.title || query };
+        } catch (err) {
+            return { error: err.message };
+        }
+    },
 });
 
 const { server } = webMod.buildServer(ctx);

@@ -16,7 +16,7 @@ async function applyRuntimeConfig(patch, ctx) {
     //   - leaveVC(force), joinVC(guildId, channelId), getPlayer()
     //   - stopAll() — clear queue + stop player, used before node cycles
     //   - State, patch()
-    const allowed = ["guildId", "channelId", "lavaHost", "lavaPort", "lavaPass", "lavaSecure"];
+    const allowed = ["guildId", "channelId", "lavaHost", "lavaPort", "lavaPass", "lavaSecure", "chatRequestsEnabled"];
     const chk = async () => {
         const p = ctx.getPlayer?.();
         if (p && typeof ctx.stopAll === "function") { try { await ctx.stopAll(false); } catch {} }

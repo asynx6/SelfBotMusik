@@ -10,6 +10,7 @@ export default function SettingsView({ onNotification }) {
     lavaPort: 80,
     lavaPass: "",
     lavaSecure: false,
+    chatRequestsEnabled: false,
   });
 
   const [loading, setLoading] = useState(true);
@@ -174,6 +175,24 @@ export default function SettingsView({ onNotification }) {
               style={{ width: 16, height: 16, accentColor: "var(--accent)" }}
             />
             <span>Gunakan SSL / TLS (Secure WSS)</span>
+          </label>
+        </div>
+
+        <div style={{ borderTop: "1px solid var(--border)", paddingTop: 20 }}>
+          <h2 style={{ fontSize: 16, fontWeight: 700, marginBottom: 14 }}>Fitur Tambahan</h2>
+          <label style={{ display: "flex", alignItems: "flex-start", gap: 10, cursor: "pointer", fontSize: 13 }}>
+            <input
+              type="checkbox"
+              checked={config.chatRequestsEnabled}
+              onChange={(e) => setConfig({ ...config, chatRequestsEnabled: e.target.checked })}
+              style={{ width: 16, height: 16, marginTop: 2, accentColor: "var(--accent)" }}
+            />
+            <div>
+              <div style={{ fontWeight: 600 }}>Request Musik via Chat Discord</div>
+              <div style={{ color: "var(--fg-secondary)", fontSize: 12 }}>
+                Pengguna di server Discord dapat me-mention bot untuk memutar lagu (contoh: <code>@bot what if i call</code>). Default dinonaktifkan.
+              </div>
+            </div>
           </label>
         </div>
 
