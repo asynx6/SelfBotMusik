@@ -42,6 +42,7 @@ async function applyRuntimeConfig(patch, ctx) {
         lavaSecure: Runtime.lavaSecure,
         guildId: Runtime.guildId,
         channelId: Runtime.channelId,
+        chatRequestsEnabled: Runtime.chatRequestsEnabled,
     });
 
     try {
