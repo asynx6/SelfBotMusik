@@ -10,6 +10,17 @@ const LOOP_MODES = {
     QUEUE: 2
 };
 
+/**
+ * Drop already-played items once this many have piled up.
+ *
+ * `_skipForward` / `next` only advance `currentIndex`; nothing ever removes the
+ * consumed entries, so the array grows for the whole uptime of the process.
+ * Each state snapshot serializes the entire array (~240 B per track), which
+ * turns a long autoplay session into megabytes of JSON per push, twice a
+ * second — GC churn that never settles and RSS that keeps climbing.
+ */
+const QUEUE_COMPACT_THRESHOLD = 64;
+
 function serializeTrack(item, isCurrent = false) {
     if (!item) return null;
     const track = item.track || item;
@@ -35,12 +46,14 @@ function serializeTrack(item, isCurrent = false) {
     }
 
     return {
+        id: track.id ?? null,
         title,
         author,
         duration,
         uri,
         thumbnail,
         encoded,
+        downloaded: Boolean(track.file_path),
         requester,
         isCurrent: Boolean(isCurrent)
     };
@@ -68,7 +81,8 @@ class PlayerController extends EventEmitter {
         this.onIntentionalDisconnect = onIntentionalDisconnect || null;
         this.isLavalinkReady = isLavalinkReady || null;
         this.autoplayEnabled = autoplayEnabled !== false; // default: true
-        this._onTrackEndAutoplay = null; // Set externally via setAutoplayProvider()
+        this._onTrackEndAutoplay = null; // returns one prepared track (pure)
+        this._onAutoplayPrefetch = null; // fills the autoplay buffer in advance
 
         this.queue = [];
         this.currentIndex = -1;
@@ -78,34 +92,89 @@ class PlayerController extends EventEmitter {
         this.loop = LOOP_MODES.OFF;
         this.paused = false;
         this.lastError = null;
+        // `lastError` is a persistent record of the last failure (tests and
+        // audit rely on it). `currentError` is the copy the dashboard shows;
+        // it is cleared as soon as a track plays successfully.
+        this.currentError = null;
 
         this._stopping = false;
+    }
+
+    _hasLocalFile(track) {
+        if (!track?.file_path) return false;
+        const fullPath = path.isAbsolute(track.file_path)
+            ? track.file_path
+            : path.join(this.dataDir || "", "library", track.file_path);
+        return fs.existsSync(fullPath);
     }
 
     _resolveEngineType(track) {
         if (!track) return null;
 
-        // Priority: LocalEngine for tracks with local files
-        if (track.file_path) {
-            const fullPath = path.isAbsolute(track.file_path)
-                ? track.file_path
-                : path.join(this.dataDir || "", "library", track.file_path);
-            if (fs.existsSync(fullPath)) {
-                return "local";
-            }
-            return null; // file_path defined but file not found on disk -> fallback to Lavalink
-        }
-
-        // Fallback: Online tracks handled by LavalinkEngine
-        if (typeof this.createLavalinkEngine === "function") {
+        // ONE voice owner per session. Switching between LavalinkEngine and
+        // LocalEngine destroys a voice connection and joins again — exactly
+        // the leave/rejoin seen on every skip with a mixed queue. Lavalink can
+        // play online tracks AND local files (stream URL, then URL/title
+        // resolve), so prefer it for the whole session whenever it is ready.
+        if (typeof this.createLavalinkEngine === "function"
+            && (!this.isLavalinkReady || this.isLavalinkReady())) {
             return "lavalink";
         }
+
+        // Lavalink off: only files that physically exist can be played.
+        if (this._hasLocalFile(track)) return "local";
 
         return null;
     }
 
     setAutoplayProvider(providerFn) {
         this._onTrackEndAutoplay = typeof providerFn === "function" ? providerFn : null;
+    }
+
+    /** Called (fire-and-forget) while a track plays, so candidates are ready. */
+    setAutoplayPrefetcher(prefetchFn) {
+        this._onAutoplayPrefetch = typeof prefetchFn === "function" ? prefetchFn : null;
+    }
+
+    /** Map a dashboard queue index (0 = current) to the internal array index. */
+    fromUiIndex(index) {
+        const i = Number(index);
+        if (!Number.isInteger(i)) return i;
+        return this.currentIndex >= 0 ? this.currentIndex + i : i;
+    }
+
+    /**
+     * Activate an engine, destroying the previous one only when the type
+     * actually changes. Keeping the same engine is what keeps the bot inside
+     * the voice channel across skip / track-end.
+     */
+    async _activateEngine(targetType) {
+        if (this.currentEngineType === targetType) return;
+
+        this.onIntentionalDisconnect?.(true);
+        try {
+            if (this.currentEngine) {
+                await this.currentEngine.destroy();
+                this.currentEngine = null;
+                this.currentEngineType = null;
+            }
+
+            // Prefer the latest voice target so a fresh LocalEngine connects
+            // to the channel the user actually selected.
+            const vt = typeof this.getVoiceTarget === "function" ? this.getVoiceTarget() : null;
+            const newEngine = targetType === "local"
+                ? await this.createLocalEngine({ channelId: vt?.channelId })
+                : await this.createLavalinkEngine();
+
+            if (!newEngine) throw new Error(`Failed to instantiate ${targetType} engine`);
+
+            this.currentEngine = newEngine;
+            this.currentEngineType = targetType;
+            this._wireEngineListeners(newEngine);
+        } finally {
+            // Genuine drops after the handoff must trigger auto-rejoin again.
+            this.onIntentionalDisconnect?.(false);
+        }
     }
 
     _logAudit(event, detail) {
@@ -149,6 +218,7 @@ class PlayerController extends EventEmitter {
         engine.on("error", async (err) => {
             if (this._stopping || this.currentEngine !== engine) return;
             this.lastError = err;
+            this.currentError = err;
             this._logAudit("track_error", err?.message || String(err));
             await this._skipForward(this.queue[this.currentIndex]);
         });
@@ -156,6 +226,7 @@ class PlayerController extends EventEmitter {
         engine.on("stuck", async (data) => {
             if (this._stopping || this.currentEngine !== engine) return;
             this.lastError = new Error("Track stuck in playback");
+            this.currentError = this.lastError;
             this._logAudit("track_stuck", data ? JSON.stringify(data) : "Track stuck");
             await this._skipForward(this.queue[this.currentIndex]);
         });
@@ -200,7 +271,56 @@ class PlayerController extends EventEmitter {
         };
     }
 
+    /**
+     * "Putar Sekarang": start this selection immediately instead of appending
+     * it to the end of the queue. The first selected track becomes the current
+     * one (top of the dashboard queue); anything that was waiting stays behind
+     * it, and the engine/voice session is reused so the bot never leaves VC.
+     */
+    async playNow(tracks, requester = "Web") {
+        const list = Array.isArray(tracks) ? tracks : (tracks ? [tracks] : []);
+        if (!list.length) throw new Error("No tracks provided to play");
+
+        // Nothing is playing: enqueue() already starts playback immediately.
+        if (!this.currentEngine || this.currentIndex < 0 || this.currentIndex >= this.queue.length) {
+            return await this.enqueue(list, requester);
+        }
+
+        const items = list.map((track) => ({ track, requester }));
+        const insertAt = this.currentIndex + 1;
+        this.queue.splice(insertAt, 0, ...items);
+        this.currentIndex = insertAt;
+        await this.playCurrent();
+
+        const serialized = serializeTrack(this.queue[insertAt], true);
+        return {
+            queued: false,
+            queuePosition: 0,
+            playing: true,
+            batch: list.length > 1 ? list.length : undefined,
+            track: serialized,
+            ...serialized,
+        };
+    }
+
+    /**
+     * Discard entries that have already finished playing and re-base
+     * `currentIndex` to 0. Called before playback starts, which is the only
+     * moment nothing needs to look back at earlier entries — `next()` resolves
+     * its autoplay seed before calling into `playCurrent()`.
+     */
+    _compactQueue() {
+        if (this.currentIndex < QUEUE_COMPACT_THRESHOLD) return 0;
+        if (this.currentIndex >= this.queue.length) return 0;
+
+        const dropped = this.currentIndex;
+        this.queue.splice(0, dropped);
+        this.currentIndex = 0;
+        return dropped;
+    }
+
     async playCurrent() {
+        this._compactQueue();
         if (this.currentIndex < 0 || this.currentIndex >= this.queue.length) {
             await this.stop();
             return;
@@ -210,43 +330,55 @@ class PlayerController extends EventEmitter {
         const targetType = this._resolveEngineType(item.track);
 
         if (!targetType) {
-            this.lastError = new Error(`No available engine for track: ${item.track?.title || "Unknown"}`);
+            const lavalinkReady = !this.isLavalinkReady || this.isLavalinkReady();
+            const reason = (item.track && !item.track.file_path && !lavalinkReady)
+                ? `Track online butuh Lavalink tapi tidak ada node Lavalink yang terhubung — `
+                  + `atur Lavalink di Pengaturan, atau unduh lagunya untuk diputar offline`
+                : `Tidak ada engine untuk lagu: ${item.track?.title || "Unknown"}`;
+            this.lastError = new Error(reason);
+            this.currentError = this.lastError;
             this._logAudit("track_skip", this.lastError.message);
             this._emitState();
             return await this._skipForward(item);
         }
 
         try {
-            if (this.currentEngineType !== targetType) {
-                this.onIntentionalDisconnect?.(true);
-                if (this.currentEngine) {
-                    await this.currentEngine.destroy();
-                    this.currentEngine = null;
-                    this.currentEngineType = null;
+            await this._activateEngine(targetType);
+
+            try {
+                await this.currentEngine.play(item.track, { volume: this.volume, startMs: 0 });
+            } catch (err) {
+                // A remote Lavalink node cannot reach /api/stream/:id and may
+                // also fail to resolve by URL. A downloaded file is still
+                // playable — fall back instead of skipping the track.
+                if (targetType === "lavalink" && this._hasLocalFile(item.track)
+                    && typeof this.createLocalEngine === "function") {
+                    console.warn(`[player] Lavalink gagal: ${err.message} — fallback LocalEngine`);
+                    await this._activateEngine("local");
+                    await this.currentEngine.play(item.track, { volume: this.volume, startMs: 0 });
+                } else {
+                    throw err;
                 }
-
-                // Prefer the latest voice target so a fresh LocalEngine
-                // connects to the channel the user actually selected.
-                const vt = typeof this.getVoiceTarget === "function" ? this.getVoiceTarget() : null;
-                const newEngine = targetType === "local"
-                    ? await this.createLocalEngine({ channelId: vt?.channelId })
-                    : await this.createLavalinkEngine();
-
-                if (!newEngine) {
-                    throw new Error(`Failed to instantiate ${targetType} engine`);
-                }
-
-                this.currentEngine = newEngine;
-                this.currentEngineType = targetType;
-                this._wireEngineListeners(newEngine);
             }
 
-            await this.currentEngine.play(item.track, { volume: this.volume, startMs: 0 });
             this.paused = false;
+            // A successful play clears the banner. `lastError` stays as the
+            // persistent record of the previous failure.
+            this.currentError = null;
             this._recordPlay(item.track);
             this._emitState();
+
+            // Prepare similar candidates while this track plays, so an empty
+            // queue never waits for a network search at track end.
+            if (this.autoplayEnabled && this._onAutoplayPrefetch
+                && this.currentIndex >= this.queue.length - 1) {
+                Promise.resolve()
+                    .then(() => this._onAutoplayPrefetch(item.track))
+                    .catch((e) => console.warn("[autoplay] prefetch:", e.message));
+            }
         } catch (err) {
             this.lastError = err;
+            this.currentError = err;
             this._logAudit("track_error", err?.message || String(err));
             this._emitState();
             return await this._skipForward(item);
@@ -294,28 +426,33 @@ class PlayerController extends EventEmitter {
             return;
         }
 
-        // loop === OFF
-        this.currentIndex++;
-        if (this.currentIndex < this.queue.length) {
+        // loop OFF: an explicitly queued next track always wins over autoplay.
+        const upcoming = this.currentIndex + 1;
+        if (upcoming < this.queue.length) {
+            this.currentIndex = upcoming;
             await this.playCurrent();
-        } else {
-            // Queue exhausted — try autoplay before stopping
-            if (this.autoplayEnabled && this._onTrackEndAutoplay) {
-                const lastTrack = this.queue[this.currentIndex - 1]?.track || null;
-                try {
-                    const nextTrack = await this._onTrackEndAutoplay(lastTrack);
-                    if (nextTrack) {
-                        await this.playNext([nextTrack], "Autoplay");
-                        this.currentIndex++;
-                        await this.playCurrent();
-                        return;
-                    }
-                } catch (e) {
-                    console.error("Autoplay error:", e.message);
-                }
-            }
-            await this.stop();
+            return;
         }
+
+        // Queue exhausted: consume a candidate that was prepared in advance.
+        if (this.autoplayEnabled && this._onTrackEndAutoplay) {
+            const lastTrack = this.queue[this.currentIndex]?.track || null;
+            try {
+                const nextTrack = await this._onTrackEndAutoplay(lastTrack);
+                if (nextTrack) {
+                    // Append exactly once. The old code called playNext() both
+                    // here and inside the provider, duplicating every track and
+                    // leaving the index pointing past the new item.
+                    this.queue.push({ track: nextTrack, requester: "Autoplay" });
+                    this.currentIndex = this.queue.length - 1;
+                    await this.playCurrent();
+                    return;
+                }
+            } catch (e) {
+                console.error("Autoplay error:", e.message);
+            }
+        }
+        await this.stop();
     }
 
     async jumpTo(index) {
@@ -333,10 +470,9 @@ class PlayerController extends EventEmitter {
             if (this.currentEngine && typeof this.currentEngine.stop === "function") {
                 await this.currentEngine.stop();
             }
-            // Drop the engine too: /api/stop tears down the Poru player
-            // (leaveVC), so the next play must re-run the factory and rejoin.
-            this.currentEngine = null;
-            this.currentEngineType = null;
+            // Keep the engine and its voice session alive. A natural queue end
+            // must NOT make the bot leave the channel — only disconnect()
+            // (Stop button / Disconnect) tears the voice connection down.
         } finally {
             this.currentIndex = -1;
             this.queue = [];
@@ -344,6 +480,30 @@ class PlayerController extends EventEmitter {
             this._stopping = false;
             this._emitState();
         }
+    }
+
+    /**
+     * Tear down the active engine and, with it, the Discord voice session.
+     *
+     * The LocalEngine owns the real voice connection for offline playback, so
+     * destroying the engine is what actually makes the bot leave the channel.
+     * `stop()` alone is not enough: it silences playback but leaves the voice
+     * connection open.
+     */
+    async disconnect() {
+        const engine = this.currentEngine;
+        this.currentEngine = null;
+        this.currentEngineType = null;
+        if (engine && typeof engine.destroy === "function") {
+            try { await engine.destroy(); } catch (e) {
+                this._logAudit("engine_destroy_error", e?.message || String(e));
+            }
+        }
+        this.currentIndex = -1;
+        this.queue = [];
+        this.paused = false;
+        this.currentError = null;
+        this._emitState();
     }
 
     async pause() {
@@ -517,13 +677,22 @@ class PlayerController extends EventEmitter {
             }
         }
 
+        // The dashboard shows the current track plus what is coming up. Played
+        // entries stay in the internal array (needed for QUEUE loop / history)
+        // but must not accumulate in the UI list forever.
+        const start = Math.max(0, this.currentIndex);
+        const visibleQueue = this.queue.slice(start);
+
         return {
             playing: currentItem ? serializeTrack(currentItem, true) : null,
-            queue: this.queue.map((item, idx) => serializeTrack(item, idx === this.currentIndex)),
+            queue: visibleQueue.map((item, idx) => serializeTrack(item, idx === 0 && !!currentItem)),
             paused: this.paused,
             volume: this.volume,
             loop: this.loop,
-            position
+            position,
+            // Surfaced to the dashboard so a track that could not play shows a
+            // reason instead of silently disappearing.
+            lastError: this.currentError ? String(this.currentError.message || this.currentError) : null
         };
     }
 

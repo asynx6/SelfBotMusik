@@ -1,6 +1,10 @@
 import React, { useState, useEffect } from "react";
 import { Play, Plus, Trash2, Heart, Upload, HardDrive, RefreshCw } from "lucide-react";
 import { api } from "../services/api";
+import { useDialog } from "../context/DialogContext";
+import TrackArt from "../components/TrackArt";
+import DownloadButton from "../components/DownloadButton";
+import { useIsMobile } from "../hooks/useMediaQuery";
 
 function formatDuration(ms) {
   if (!ms) return "0:00";
@@ -15,6 +19,22 @@ export default function LibraryView({ onNotification }) {
   const [loading, setLoading] = useState(true);
   const [filter, setFilter] = useState("all");
   const [uploading, setUploading] = useState(false);
+  const [likedIds, setLikedIds] = useState(() => new Set());
+  const { confirm } = useDialog();
+  const isMobile = useIsMobile();
+
+  const loadLikes = async () => {
+    try {
+      const data = await api.getLikes();
+      setLikedIds(new Set((data.tracks || []).map((t) => t.id)));
+    } catch {
+      /* non-fatal: the like icons just start unset */
+    }
+  };
+
+  useEffect(() => {
+    loadLikes();
+  }, []);
 
   const loadTracks = async () => {
     setLoading(true);
@@ -34,7 +54,7 @@ export default function LibraryView({ onNotification }) {
 
   const handlePlay = async (track) => {
     try {
-      await api.addToQueue([track.id]);
+      await api.playNow([track.id]);
       onNotification?.("success", `Memutar: ${track.title}`);
     } catch (err) {
       onNotification?.("error", err.message);
@@ -51,7 +71,13 @@ export default function LibraryView({ onNotification }) {
   };
 
   const handleDeleteFile = async (track) => {
-    if (!confirm(`Hapus file lokal untuk "${track.title}"? (Metadata tetap tersimpan)`)) return;
+    const ok = await confirm({
+      title: "Hapus File Lokal",
+      message: `File audio untuk "${track.title}" akan dihapus dari disk. Metadata dan riwayatnya tetap tersimpan.`,
+      confirmText: "Hapus File",
+      danger: true,
+    });
+    if (!ok) return;
     try {
       await api.deleteTrackFile(track.id);
       onNotification?.("success", "File lokal dihapus");
@@ -62,7 +88,13 @@ export default function LibraryView({ onNotification }) {
   };
 
   const handleDeleteTrack = async (track) => {
-    if (!confirm(`Hapus permanen lagu "${track.title}" dari library?`)) return;
+    const ok = await confirm({
+      title: "Hapus Lagu",
+      message: `"${track.title}" akan dihapus permanen dari library, termasuk file dan metadatanya.`,
+      confirmText: "Hapus Permanen",
+      danger: true,
+    });
+    if (!ok) return;
     try {
       await api.deleteTrack(track.id);
       onNotification?.("success", "Lagu dihapus dari library");
@@ -73,10 +105,24 @@ export default function LibraryView({ onNotification }) {
   };
 
   const handleToggleLike = async (track) => {
+    const wasLiked = likedIds.has(track.id);
+
+    // Optimistic: flip the icon immediately, reconcile with the server after.
+    const apply = (liked) => setLikedIds((prev) => {
+      const next = new Set(prev);
+      if (liked) next.add(track.id);
+      else next.delete(track.id);
+      return next;
+    });
+
+    apply(!wasLiked);
     try {
       const r = await api.toggleLike(track.id);
-      onNotification?.("success", r.liked ? "Ditambahkan ke Disukai" : "Dihapus dari Disukai");
+      const nowLiked = typeof r?.liked === "boolean" ? r.liked : !wasLiked;
+      apply(nowLiked);
+      onNotification?.("success", nowLiked ? "Ditambahkan ke Disukai" : "Dihapus dari Disukai");
     } catch (err) {
+      apply(wasLiked); // rollback
       onNotification?.("error", err.message);
     }
   };
@@ -109,8 +155,8 @@ export default function LibraryView({ onNotification }) {
   };
 
   return (
-    <div style={{ padding: "28px 32px", overflowY: "auto", flex: 1 }}>
-      <div style={{ display: "flex", alignItems: "center", justifyContent: "space-between", marginBottom: 20 }}>
+    <div className="page-body">
+      <div style={{ display: "flex", alignItems: "center", justifyContent: "space-between", gap: 12, flexWrap: "wrap", marginBottom: 20 }}>
         <div>
           <h1 style={{ fontSize: 24, fontWeight: 700 }}>Library Musik</h1>
           <p style={{ color: "var(--fg-secondary)", fontSize: 13 }}>{tracks.length} lagu tersimpan di database</p>
@@ -129,6 +175,7 @@ export default function LibraryView({ onNotification }) {
             cursor: "pointer",
             fontWeight: 600,
             fontSize: 13,
+            whiteSpace: "nowrap",
           }}>
             <Upload size={16} />
             <span>{uploading ? "Mengunggah..." : "Unggah Audio"}</span>
@@ -173,6 +220,12 @@ export default function LibraryView({ onNotification }) {
         ))}
       </div>
 
+      <p style={{ fontSize: 12, color: "var(--fg-muted)", marginTop: -8, marginBottom: 18, lineHeight: 1.5 }}>
+        Lagu tanpa badge <span style={{ color: "var(--success)", fontWeight: 600 }}>Lokal</span> adalah
+        referensi hasil pencarian / request: belum punya file di disk dan butuh Lavalink untuk diputar.
+        Klik Unduh di halaman Cari &amp; Temukan untuk menjadikannya lagu offline.
+      </p>
+
       {/* Track List */}
       <div style={{ display: "flex", flexDirection: "column", gap: 6 }}>
         {tracks.map((t) => (
@@ -180,8 +233,12 @@ export default function LibraryView({ onNotification }) {
             key={t.id}
             style={{
               display: "flex",
-              alignItems: "center",
+              // On phones the four action buttons would squeeze the title into
+              // an ellipsis, so the row stacks: info on top, actions below.
+              flexDirection: isMobile ? "column" : "row",
+              alignItems: isMobile ? "stretch" : "center",
               justifyContent: "space-between",
+              gap: isMobile ? 8 : 0,
               padding: "10px 16px",
               background: "var(--bg-secondary)",
               borderRadius: "var(--radius-sm)",
@@ -189,21 +246,31 @@ export default function LibraryView({ onNotification }) {
             }}
           >
             <div style={{ display: "flex", alignItems: "center", gap: 12, flex: 1, minWidth: 0 }}>
-              <img
-                src={t.cover_url || (t.cover_path ? `/api/library/tracks/${t.id}/cover` : "https://placehold.co/40x40?text=Audio")}
+              <TrackArt
+                src={t.thumbnail || t.cover_url || (t.cover_path ? `/api/library/tracks/${t.id}/cover` : "")}
                 alt={t.title}
-                style={{ width: 40, height: 40, borderRadius: 4, objectFit: "cover" }}
               />
 
               <div style={{ minWidth: 0, flex: 1 }}>
                 <div style={{ fontWeight: 600, whiteSpace: "nowrap", overflow: "hidden", textOverflow: "ellipsis" }}>
                   {t.title}
                 </div>
-                <div style={{ fontSize: 12, color: "var(--fg-secondary)", display: "flex", gap: 8, alignItems: "center" }}>
-                  <span>{t.artist || "Unknown"}</span>
+                <div style={{
+                  fontSize: 12,
+                  color: "var(--fg-secondary)",
+                  display: "flex",
+                  gap: 8,
+                  alignItems: "center",
+                  whiteSpace: "nowrap",
+                  minWidth: 0,
+                  overflow: "hidden",
+                }}>
+                  {/* /api/library/tracks serialises `author`/`duration`, while the
+                      raw-row endpoints expose `artist`/`duration_ms`. */}
+                  <span style={{ overflow: "hidden", textOverflow: "ellipsis" }}>{t.author || t.artist || "Unknown"}</span>
                   <span>•</span>
-                  <span>{formatDuration(t.duration_ms)}</span>
-                  {t.file_path && (
+                  <span>{formatDuration(t.duration ?? t.duration_ms)}</span>
+                  {t.downloaded && (
                     <>
                       <span>•</span>
                       <span style={{ color: "var(--success)", display: "flex", alignItems: "center", gap: 4 }}>
@@ -215,13 +282,22 @@ export default function LibraryView({ onNotification }) {
               </div>
             </div>
 
-            <div style={{ display: "flex", alignItems: "center", gap: 6 }}>
+            <div style={{ display: "flex", alignItems: "center", gap: 6, justifyContent: isMobile ? "flex-end" : "flex-start" }}>
               <button
                 onClick={() => handleToggleLike(t)}
-                title="Sukai Lagu"
-                style={{ padding: 6, color: "var(--fg-secondary)" }}
+                title={likedIds.has(t.id) ? "Hapus dari Disukai" : "Sukai Lagu"}
+                aria-pressed={likedIds.has(t.id)}
+                style={{
+                  padding: 6,
+                  color: likedIds.has(t.id) ? "var(--like)" : "var(--fg-secondary)",
+                  transition: "color 120ms ease",
+                }}
               >
-                <Heart size={16} />
+                <Heart
+                  size={16}
+                  fill={likedIds.has(t.id) ? "var(--like)" : "none"}
+                  stroke={likedIds.has(t.id) ? "var(--like)" : "currentColor"}
+                />
               </button>
 
               <button
@@ -251,7 +327,14 @@ export default function LibraryView({ onNotification }) {
                 <span>Putar</span>
               </button>
 
-              {t.file_path && (
+              <DownloadButton
+                trackId={t.id}
+                downloaded={!!t.downloaded}
+                onNotification={onNotification}
+                compact
+              />
+
+              {t.downloaded && (
                 <button
                   onClick={() => handleDeleteFile(t)}
                   title="Hapus file fisik (pertahankan metadata)"

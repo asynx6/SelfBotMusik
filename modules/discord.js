@@ -1,10 +1,39 @@
 "use strict";
 
-const { Client } = require("discord.js-selfbot-v13");
+const { Client, Options } = require("discord.js-selfbot-v13");
 const runtimeMod = require("./runtime");
+const stateMod = require("./state");
+
+/**
+ * Cache ceilings.
+ *
+ * discord.js keeps every message, user, presence and reaction it observes. On
+ * a selfbot that stays online for weeks this is the classic slow RSS climb:
+ * the caches are keyed by snowflake and never shrink on their own. The library
+ * default only caps MessageManager (200/channel); everything else is bounded
+ * solely by how much the account sees.
+ */
+const CACHE_LIMITS = {
+    ...Options.defaultMakeCacheSettings,
+    MessageManager: 100,
+    UserManager: 500,
+    PresenceManager: 100,
+    ReactionManager: 50,
+    GuildStickerManager: 50,
+};
+
+const SWEEPERS = {
+    ...Options.defaultSweeperSettings,
+    // Drop cached messages older than 30 minutes, swept every 10 minutes.
+    messages: { interval: 600, lifetime: 1800 },
+};
 
 function createClient() {
-    return new Client({ checkUpdate: false });
+    return new Client({
+        checkUpdate: false,
+        makeCache: Options.cacheWithLimits(CACHE_LIMITS),
+        sweepers: SWEEPERS,
+    });
 }
 
 // Re-bind safety events: voice state drops, guild/channel deletion, shard
@@ -113,10 +142,16 @@ function wireSafetyEvents(client, ctx) {
             if (typeof ctx.handleChatRequest === "function") {
                 const res = await ctx.handleChatRequest(content, message.author.tag);
                 if (res?.ok) {
-                    const detail = res.playlistName
-                        ? `Memutar playlist **${res.playlistName}** (${res.count} lagu)`
-                        : `Memutar: **${res.title || content}**`;
-                    try { await message.reply(`🎵 ${detail}`); } catch {}
+                    const what = res.playlistName
+                        ? `Playlist **${res.playlistName}** (${res.count} lagu)`
+                        : `**${res.title || content}**`;
+                    // A request only starts playback when nothing is playing;
+                    // otherwise it is appended. Report which one happened so a
+                    // quiet queue does not look like a failed request.
+                    const action = res.queued
+                        ? `masuk antrian${Number.isInteger(res.queuePosition) ? ` (#${res.queuePosition})` : ""}`
+                        : "sedang diputar";
+                    try { await message.reply(`🎵 ${what} ${action}.`); } catch {}
                 } else if (res?.error) {
                     try { await message.reply(`⚠️ Gagal: ${res.error}`); } catch {}
                 }

@@ -14,12 +14,18 @@ const State = {
     voiceChannelId: "",
     guildId: "",
     lastError: null,
+    // Playback-level failure from the PlayerController (e.g. a track that
+    // could not be played). Kept separate from `lastError`, which carries
+    // Discord/Lavalink/runtime system errors.
+    playbackError: null,
     loop: 0, // 0 OFF, 1 TRACK, 2 QUEUE
     needsSetup: true,
 };
 
 const emitter = new EventEmitter();
-emitter.setMaxListeners(0);
+// A finite limit keeps Node's "possible EventEmitter memory leak" warning
+// working. Setting 0 (unlimited) silently hides listener accumulation.
+emitter.setMaxListeners(20);
 
 function patch(partial) {
     Object.assign(State, partial);
@@ -37,8 +43,14 @@ function tick(getPlayer) {
 }
 
 function snapshot() {
-    // Always return a safe copy so WS clients can't mutate the live state.
-    return JSON.parse(JSON.stringify(State));
+    // Shallow copy is enough: every value written into State is a plain,
+    // already-serialized object (see serializeTrack), and consumers only
+    // stringify. The previous JSON.parse(JSON.stringify()) round-trip
+    // serialized the whole queue twice per push, twice a second.
+    return {
+        ...State,
+        queue: Array.isArray(State.queue) ? State.queue.slice() : [],
+    };
 }
 
 module.exports = {

@@ -52,6 +52,7 @@ const library = require("../modules/library");
 const { PlayerController } = require("../modules/player-controller");
 const { BaseEngine } = require("../modules/engines/base");
 const { buildServer } = require("../modules/webserver");
+const stateMod = require("../modules/state");
 
 const JWT_SECRET = testDb.prepare("SELECT value FROM settings WHERE key = 'jwt_secret'").get().value;
 const AUTH_COOKIE = "auth_token=" + jwt.sign({ sub: "admin", role: "admin", ts: Date.now() }, JWT_SECRET, { expiresIn: 3600 });
@@ -215,7 +216,9 @@ test("GET /api/library/tracks supports filtering and pagination", async () => {
     assert.equal(queried.json.tracks[0].id, t2.id);
 });
 
-test("POST /api/downloads enqueues and GET /api/downloads lists status", async () => {
+test("POST /api/downloads enqueues without requiring Lavalink", async () => {
+    // yt-dlp reads tracks.uri from SQLite; a disconnected node must not block it.
+    stateMod.patch({ connected: false });
     const t2 = library.findBySourceKey("youtube:vid2");
     const post = await request("POST", "/api/downloads", { trackIds: [t2.id] });
     assert.equal(post.status, 200);
@@ -239,6 +242,17 @@ test("POST /api/downloads enqueues and GET /api/downloads lists status", async (
     const del = await request("DELETE", `/api/downloads/${dlId}`);
     assert.equal(del.status, 200);
     assert.deepEqual(downloads.canceled, [dlId]);
+});
+
+test("POST /api/queue/play-now plays the requested track immediately", async () => {
+    const t1 = library.findBySourceKey("youtube:vid1");
+    const res = await request("POST", "/api/queue/play-now", { trackIds: [t1.id] });
+    assert.equal(res.status, 200);
+    assert.equal(res.json.ok, true);
+    assert.equal(res.json.playing, true);
+    assert.equal(res.json.queued, false, "must not be appended to the end of the queue");
+    // The controller is shared across this file's tests; leave it clean.
+    await controller.disconnect();
 });
 
 test("POST /api/queue/add enqueues tracks into PlayerController", async () => {

@@ -37,6 +37,8 @@ export const api = {
   getStatus: () => apiFetch("/api/auth/status"),
   login: (password) => apiFetch("/api/auth/login", { method: "POST", body: JSON.stringify({ password }) }),
   logout: () => apiFetch("/api/auth/logout", { method: "POST" }),
+  changePassword: (current, next) =>
+    apiFetch("/api/auth/change-password", { method: "POST", body: JSON.stringify({ current, next }) }),
 
   // State & Playback
   getState: () => apiFetch("/api/state"),
@@ -51,6 +53,7 @@ export const api = {
   clearQueue: () => apiFetch("/api/clear", { method: "POST" }),
   removeFromQueue: (index) => apiFetch(`/api/queue/${index}`, { method: "DELETE" }),
   playNext: (trackIds) => apiFetch("/api/queue/play-next", { method: "POST", body: JSON.stringify({ trackIds }) }),
+  playNow: (trackIds) => apiFetch("/api/queue/play-now", { method: "POST", body: JSON.stringify({ trackIds }) }),
   shuffleQueue: () => apiFetch("/api/queue/shuffle", { method: "POST" }),
   reorderQueue: (oldIndex, newIndex) => apiFetch("/api/queue/reorder", { method: "POST", body: JSON.stringify({ oldIndex, newIndex }) }),
   jumpQueue: (index) => apiFetch("/api/queue/jump", { method: "POST", body: JSON.stringify({ index }) }),

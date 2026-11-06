@@ -34,7 +34,7 @@ export default function DownloadsView({ onNotification }) {
   };
 
   return (
-    <div style={{ padding: "28px 32px", overflowY: "auto", flex: 1 }}>
+    <div className="page-body">
       <div style={{ display: "flex", alignItems: "center", justifyContent: "space-between", marginBottom: 20 }}>
         <div>
           <h1 style={{ fontSize: 24, fontWeight: 700 }}>Antrian Unduhan</h1>

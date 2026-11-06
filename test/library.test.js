@@ -331,3 +331,13 @@ test("path traversal checks reject invalid file names and extensions", () => {
     assert.throws(() => library.attachFile(1, { filePath: "../bad.mp3" }), /Invalid file path/);
     assert.throws(() => library.attachFile(1, { filePath: "1.exe" }), /Disallowed audio format/);
 });
+
+test("freeDiskBytes reports free space, or null when statfs is unavailable", async () => {
+    const free = await library.freeDiskBytes();
+    // `null` is the documented graceful degradation (unsupported filesystem);
+    // otherwise it must be a real, non-negative byte count.
+    if (free !== null) {
+        assert.equal(typeof free, "number");
+        assert.ok(free >= 0, `free space must not be negative, got ${free}`);
+    }
+});

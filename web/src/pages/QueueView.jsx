@@ -2,6 +2,8 @@ import React, { useState } from "react";
 import { Play, Trash2, ArrowUp, ArrowDown, Shuffle, Music, Layers } from "lucide-react";
 import { usePlayer } from "../context/PlayerContext";
 import { api } from "../services/api";
+import TrackArt from "../components/TrackArt";
+import DownloadButton from "../components/DownloadButton";
 
 function formatDuration(ms) {
   if (!ms) return "0:00";
@@ -59,11 +61,15 @@ export default function QueueView({ onNotification }) {
   };
 
   return (
-    <div style={{ padding: "28px 32px", overflowY: "auto", flex: 1 }}>
+    <div className="page-body">
       <div style={{ display: "flex", alignItems: "center", justifyContent: "space-between", marginBottom: 20 }}>
         <div>
           <h1 style={{ fontSize: 24, fontWeight: 700 }}>Antrian Putar</h1>
           <p style={{ color: "var(--fg-secondary)", fontSize: 13 }}>{queue.length} lagu di antrian</p>
+          <p style={{ color: "var(--fg-muted)", fontSize: 12, marginTop: 4, lineHeight: 1.5 }}>
+            Hanya lagu yang sedang diputar dan yang menunggu. Saat antrian habis,
+            autoplay menyiapkan lagu serupa lebih dulu — lagu yang Anda tambahkan tetap diprioritaskan.
+          </p>
         </div>
 
         <div style={{ display: "flex", gap: 10 }}>
@@ -130,11 +136,7 @@ export default function QueueView({ onNotification }) {
                   {isCurrent ? <Play size={14} fill="var(--accent)" /> : idx + 1}
                 </span>
 
-                <img
-                  src={item.thumbnail || "https://placehold.co/40x40?text=Track"}
-                  alt={item.title}
-                  style={{ width: 40, height: 40, borderRadius: 4, objectFit: "cover" }}
-                />
+                <TrackArt src={item.thumbnail} alt={item.title} />
 
                 <div style={{ minWidth: 0, flex: 1 }}>
                   <div style={{ fontWeight: 600, color: isCurrent ? "var(--accent)" : "var(--fg-primary)", whiteSpace: "nowrap", overflow: "hidden", textOverflow: "ellipsis" }}>
@@ -147,6 +149,14 @@ export default function QueueView({ onNotification }) {
               </div>
 
               <div style={{ display: "flex", alignItems: "center", gap: 6 }}>
+                {Number.isInteger(item.id) && (
+                  <DownloadButton
+                    trackId={item.id}
+                    downloaded={!!item.downloaded}
+                    onNotification={onNotification}
+                    compact
+                  />
+                )}
                 {!isCurrent && (
                   <>
                     <button

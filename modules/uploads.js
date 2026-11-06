@@ -376,6 +376,21 @@ function createUploadHandler(deps = {}) {
                     fail(400, "Failed to check disk quota");
                     return;
                 }
+
+                // Real free space on the volume, not just the library quota.
+                const reserveMb = Number(process.env.DISK_RESERVE_MB ?? 128);
+                if (reserveMb > 0 && typeof library.freeDiskBytes === "function") {
+                    let freeBytes = null;
+                    try {
+                        freeBytes = await library.freeDiskBytes();
+                    } catch {
+                        freeBytes = null;
+                    }
+                    if (freeBytes !== null && (freeBytes - totalNewBytes) < reserveMb * 1024 * 1024) {
+                        fail(400, `Not enough free disk space (reserve ${reserveMb} MB)`);
+                        return;
+                    }
+                }
             }
 
             if (hasFailed) return;

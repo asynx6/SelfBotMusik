@@ -1,6 +1,8 @@
 import React, { useState, useEffect } from "react";
 import { History as HistoryIcon, Play, Clock } from "lucide-react";
 import { api } from "../services/api";
+import TrackArt from "../components/TrackArt";
+import DownloadButton from "../components/DownloadButton";
 
 function formatDuration(ms) {
   if (!ms) return "0:00";
@@ -30,7 +32,7 @@ export default function HistoryView({ onNotification }) {
   }, []);
 
   return (
-    <div style={{ padding: "28px 32px", overflowY: "auto", flex: 1 }}>
+    <div className="page-body">
       <div style={{ display: "flex", alignItems: "center", gap: 14, marginBottom: 24 }}>
         <div style={{
           width: 52,
@@ -66,10 +68,9 @@ export default function HistoryView({ onNotification }) {
             }}
           >
             <div style={{ display: "flex", alignItems: "center", gap: 12, flex: 1, minWidth: 0 }}>
-              <img
-                src={item.cover_url || (item.cover_path ? `/api/library/tracks/${item.id}/cover` : "https://placehold.co/40x40?text=Audio")}
+              <TrackArt
+                src={item.thumbnail || item.cover_url || (item.cover_path ? `/api/library/tracks/${item.id}/cover` : "")}
                 alt={item.title}
-                style={{ width: 40, height: 40, borderRadius: 4, objectFit: "cover" }}
               />
               <div style={{ minWidth: 0, flex: 1 }}>
                 <div style={{ fontWeight: 600, whiteSpace: "nowrap", overflow: "hidden", textOverflow: "ellipsis" }}>
@@ -81,13 +82,27 @@ export default function HistoryView({ onNotification }) {
               </div>
             </div>
 
-            <button
-              onClick={() => api.addToQueue([item.id])}
-              title="Putar Lagi"
-              style={{ padding: 8, color: "var(--fg-secondary)" }}
-            >
-              <Play size={16} />
-            </button>
+            <div style={{ display: "flex", alignItems: "center", gap: 6 }}>
+              <DownloadButton
+                trackId={item.id}
+                downloaded={!!item.file_path}
+                onNotification={onNotification}
+                compact
+              />
+              <button
+                onClick={async () => {
+                  try {
+                    await api.playNow([item.id]);
+                  } catch (e) {
+                    onNotification?.("error", e.message);
+                  }
+                }}
+                title="Putar Lagi"
+                style={{ padding: 8, color: "var(--fg-secondary)" }}
+              >
+                <Play size={16} />
+              </button>
+            </div>
           </div>
         ))}
       </div>

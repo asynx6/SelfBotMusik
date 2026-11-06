@@ -42,7 +42,11 @@ function wirePoruEvents(poru, patch) {
     poru.on("nodeError", (node, err) => {
         const msg = err?.message || String(err || "");
         console.error(`❌ Node [${node.name}] error: ${msg.slice(0, 240)}`);
-        try { patch({ lastError: msg.slice(0, 240) }); } catch {}
+        // A node that errored is not usable. Clear the cached flag as well:
+        // Poru emits nodeError without a matching nodeDisconnect for some WS
+        // failures, which would leave the dashboard showing "connected" and
+        // the engine picker sending tracks to a dead node.
+        try { patch({ connected: false, lastError: msg.slice(0, 240) }); } catch {}
     });
 }
 

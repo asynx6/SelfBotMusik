@@ -12,7 +12,15 @@ import {
 } from "lucide-react";
 import { api } from "../services/api";
 
-export default function Sidebar({ currentTab, setCurrentTab, playlists = [], onNewPlaylist }) {
+export default function Sidebar({
+  currentTab,
+  setCurrentTab,
+  playlists = [],
+  onNewPlaylist,
+  isMobile = false,
+  isOpen = false,
+  onClose,
+}) {
   const handleLogout = async () => {
     try {
       await api.logout();
@@ -22,10 +30,30 @@ export default function Sidebar({ currentTab, setCurrentTab, playlists = [], onN
     }
   };
 
+  // On mobile the sidebar is an off-canvas drawer, so picking a destination
+  // must also dismiss it.
+  const selectTab = (id) => {
+    setCurrentTab(id);
+    if (isMobile) onClose?.();
+  };
+
+  const drawerStyle = {
+    position: "fixed",
+    top: 0,
+    bottom: 0,
+    left: 0,
+    zIndex: 300,
+    width: 272,
+    height: "100dvh",
+    transform: isOpen ? "translateX(0)" : "translateX(-100%)",
+    transition: "transform 220ms cubic-bezier(0.16, 1, 0.3, 1)",
+    boxShadow: isOpen ? "0 0 48px rgba(0, 0, 0, 0.65)" : "none",
+  };
+
   const navItems = [
     { id: "discover", label: "Pencarian", icon: Compass },
     { id: "queue", label: "Antrian Putar", icon: ListMusic },
-    { id: "library", label: "Lagu Lokal", icon: Library },
+    { id: "library", label: "Perpustakaan", icon: Library },
     { id: "likes", label: "Lagu Disukai", icon: Heart },
     { id: "history", label: "Riwayat Putar", icon: History },
     { id: "downloads", label: "Unduhan", icon: Download },
@@ -33,7 +61,15 @@ export default function Sidebar({ currentTab, setCurrentTab, playlists = [], onN
   ];
 
   return (
-    <div style={{
+    <>
+      {isMobile && isOpen ? (
+        <div
+          onClick={onClose}
+          aria-hidden="true"
+          style={{ position: "fixed", inset: 0, background: "rgba(0, 0, 0, 0.55)", zIndex: 299 }}
+        />
+      ) : null}
+      <div style={{
       width: 240,
       background: "var(--bg-secondary)",
       borderRight: "1px solid var(--border)",
@@ -42,6 +78,7 @@ export default function Sidebar({ currentTab, setCurrentTab, playlists = [], onN
       height: "100%",
       padding: "20px 16px",
       flexShrink: 0,
+      ...(isMobile ? drawerStyle : null),
     }}>
       {/* Brand Header */}
       <div style={{ display: "flex", alignItems: "center", gap: 10, paddingBottom: 24, borderBottom: "1px solid var(--border)" }}>
@@ -60,8 +97,7 @@ export default function Sidebar({ currentTab, setCurrentTab, playlists = [], onN
           S
         </div>
         <div>
-          <div style={{ fontWeight: 700, fontSize: 16, color: "var(--fg-primary)", letterSpacing: "-0.5px" }}>SelfBotMusik</div>
-          <div style={{ fontSize: 11, color: "var(--fg-muted)" }}>v2.0 Fondasi</div>
+          <div style={{ fontWeight: 700, fontSize: 16, color: "var(--fg-primary)", letterSpacing: "-0.5px" }}>SelfBotMusic</div>
         </div>
       </div>
 
@@ -73,7 +109,7 @@ export default function Sidebar({ currentTab, setCurrentTab, playlists = [], onN
           return (
             <button
               key={item.id}
-              onClick={() => setCurrentTab(item.id)}
+              onClick={() => selectTab(item.id)}
               style={{
                 display: "flex",
                 alignItems: "center",
@@ -115,7 +151,7 @@ export default function Sidebar({ currentTab, setCurrentTab, playlists = [], onN
             return (
               <button
                 key={p.id}
-                onClick={() => setCurrentTab(`playlist:${p.id}`)}
+                onClick={() => selectTab(`playlist:${p.id}`)}
                 style={{
                   display: "flex",
                   alignItems: "center",
@@ -154,6 +190,7 @@ export default function Sidebar({ currentTab, setCurrentTab, playlists = [], onN
           <span>Keluar</span>
         </button>
       </div>
-    </div>
+      </div>
+    </>
   );
 }

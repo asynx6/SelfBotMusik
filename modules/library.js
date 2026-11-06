@@ -228,6 +228,27 @@ function diskUsage() {
     return promise;
 }
 
+/**
+ * Free bytes on the volume that holds `dir` (defaults to the library folder).
+ *
+ * The library quota only bounds the tracks themselves; it says nothing about
+ * the disk the whole server lives on. On a small panel (900 MB is common) an
+ * unrelated temp file or a half-finished download can fill the volume and take
+ * the process down, so callers check real free space before writing.
+ *
+ * Returns `null` when the platform or filesystem cannot report it, so callers
+ * can degrade to the quota check instead of failing closed.
+ */
+async function freeDiskBytes(dir) {
+    const target = dir || getLibraryDir();
+    try {
+        const stats = await fs.promises.statfs(target);
+        return Number(stats.bavail) * Number(stats.bsize);
+    } catch {
+        return null;
+    }
+}
+
 module.exports = {
     upsertFromLavalink,
     getById,
@@ -238,6 +259,7 @@ module.exports = {
     findBySourceKey,
     findBySha256,
     diskUsage,
+    freeDiskBytes,
     resolveFilePath,
     resolveCoverPath,
     getLibraryDir,

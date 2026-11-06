@@ -17,6 +17,7 @@ const playlists = require("./playlists");
 const likes = require("./likes");
 const history = require("./history");
 const recommendations = require("./recommendations");
+const { createBroadcaster } = require("./broadcaster");
 
 // Serialize a DB track row for API responses, adding downloaded/downloading flags.
 function serializeApiTrack(track) {
@@ -56,26 +57,10 @@ function buildServer(ctx) {
     const hist = ctx.history || history;
     const rec = ctx.recommendations || recommendations;
 
-    // Send a snapshot to all WS clients. The browser only redraws when
-    // the payload changes — we don't need to log every heartbeat.
-    function push(tag = "update") {
-        const payload = JSON.stringify({ type: "state", tag, data: stateMod.snapshot() });
-        let count = 0;
-        if (!ctx.wss) return 0;
-        for (const c of ctx.wss.clients) {
-            if (c.readyState === 1) {
-                try { c.send(payload); count++; } catch {}
-            }
-        }
-        return count;
-    }
-    // Coalesce successive change events into one push per 150 ms.
-    let pending = null;
-    function onChange() {
-        push("change");
-        if (pending) return;
-        pending = setTimeout(() => { pending = null; }, 150);
-    }
+    // Dashboard state broadcaster: coalesces bursts, drops stalled peers, and
+    // keeps a ping/pong heartbeat so dead sockets cannot accumulate.
+    const broadcaster = createBroadcaster({ getSnapshot: () => stateMod.snapshot() });
+    const onChange = () => broadcaster.request("change");
 
     // --- Auth gate: all /api/* except /api/auth/* and /api/stream/* need a valid JWT cookie. ---
     app.use("/api", (req, res, next) => {
@@ -86,10 +71,17 @@ function buildServer(ctx) {
         res.status(401).json({ error: "Unauthorized", unAuthed: true });
     });
 
-    // --- Custom HTML gate: protect the dashboard at "/" BEFORE static serves index.html. ---
-    app.get("/", (req, res, next) => {
-        if (auth.verifyToken(req)) return next();
-        return res.redirect("/login");
+    // --- Custom HTML gate: protect the dashboard shell BEFORE static runs. ---
+    // "/index.html" is listed explicitly because express.static would otherwise
+    // serve the shell straight off disk, skipping the login redirect entirely.
+    const publicDir = path.join(__dirname, "..", "public");
+    const indexFile = path.join(publicDir, "index.html");
+
+    app.get(["/", "/index.html"], (req, res) => {
+        if (!auth.verifyToken(req)) return res.redirect("/login");
+        // Served directly: express.static below runs with `index: false`, so
+        // the shell can only ever come out of this authenticated branch.
+        return res.sendFile(indexFile);
     });
 
     // --- Login + static files serving. ---
@@ -98,7 +90,8 @@ function buildServer(ctx) {
         res.set("Content-Type", "text/html; charset=utf-8");
         res.send(renderLoginPage());
     });
-    app.use(express.static(path.join(__dirname, "..", "public")));
+    // `index: false` keeps the shell behind the gate above; assets stay public.
+    app.use(express.static(publicDir, { index: false }));
 
     // JWT-protected login page (served from template, no static file needed)
     function renderLoginPage() {
@@ -107,23 +100,30 @@ function buildServer(ctx) {
 <head>
     <meta charset="utf-8" />
     <meta name="viewport" content="width=device-width, initial-scale=1" />
-    <title>SelfBotMusik · Login</title>
-    <meta name="description" content="Sign in to the SelfBotMusik dashboard." />
+    <title>SelfBotMusic · Login</title>
+    <meta name="description" content="Sign in to the SelfBotMusic dashboard." />
     <meta name="theme-color" content="#0e0f12" />
     <link rel="preconnect" href="https://fonts.googleapis.com" />
     <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin />
     <link href="https://fonts.googleapis.com/css2?family=Inter:wght@400;500;600;700;800&family=JetBrains+Mono:wght@500&display=swap" rel="stylesheet" />
     <style>
+        /* Same design tokens as web/src/styles/global.css (grey + orange). */
         :root {
-            --bg: #0e0f12;
+            --bg: #0f0f0f;
             --surface: #181818;
             --surface-2: #202020;
-            --border: #2a2a2a;
-            --border-strong: #3a3a3a;
+            --border: #333333;
+            --border-hover: #404040;
             --text: #ffffff;
-            --text-dim: #a0a0a0;
+            --text-dim: #b3b3b3;
+            --text-muted: #737373;
             --accent: #ff6b00;
             --accent-hover: #ff8533;
+            --accent-soft: rgba(255, 107, 0, 0.12);
+            --error: #ff3b30;
+            --radius-sm: 6px;
+            --radius-md: 10px;
+            --radius-lg: 16px;
         }
         * { margin: 0; padding: 0; box-sizing: border-box; }
         body {
@@ -131,65 +131,83 @@ function buildServer(ctx) {
             display: grid; place-items: center;
             padding: 24px;
             background:
-                radial-gradient(circle at 20% 20%, rgba(255,255,255,0.04) 0, transparent 40%),
-                radial-gradient(circle at 80% 70%, rgba(255,255,255,0.025) 0, transparent 40%),
+                radial-gradient(circle at 50% 0%, rgba(255,107,0,0.07) 0, transparent 55%),
                 var(--bg);
             font-family: 'Inter', system-ui, -apple-system, sans-serif;
             color: var(--text);
+            -webkit-font-smoothing: antialiased;
         }
         .login-card {
-            width: min(420px, 100%);
+            width: min(400px, 100%);
             background: var(--surface);
             border: 1px solid var(--border);
-            padding: 36px 32px;
-            border-radius: 18px;
-            box-shadow: 0 30px 80px -20px rgba(0,0,0,0.6);
+            padding: 32px 28px 28px;
+            border-radius: var(--radius-lg);
+            box-shadow: 0 24px 64px -24px rgba(0,0,0,0.75);
         }
         .login-logo {
-            width: 56px; height: 56px;
-            border-radius: 12px;
-            background: linear-gradient(135deg, #ffffff, #c5c8cf);
-            color: #0e0f12;
-            font-size: 28px; font-weight: 800;
+            width: 52px; height: 52px;
+            border-radius: var(--radius-md);
+            background: var(--accent);
+            color: #ffffff;
+            font-size: 26px; font-weight: 800;
             display: grid; place-items: center;
             margin-bottom: 18px;
+            box-shadow: 0 8px 24px -8px rgba(255,107,0,0.65);
         }
-        .login-title { font-size: 22px; font-weight: 700; letter-spacing: -0.2px; }
-        .login-sub { color: var(--text-dim); font-size: 13px; margin-top: 4px; }
-        .login-form { margin-top: 24px; }
-        .login-field { margin-bottom: 14px; }
+        .login-title { font-size: 21px; font-weight: 700; letter-spacing: -0.4px; }
+        .login-sub { color: var(--text-muted); font-size: 13px; margin-top: 5px; }
+        .login-form { margin-top: 26px; }
+        .login-field { margin-bottom: 16px; }
         .login-field label {
-            display: block; font-size: 11px; color: var(--text-dim);
-            text-transform: uppercase; letter-spacing: 0.8px; margin-bottom: 6px;
+            display: block; font-size: 11px; color: var(--text-muted);
+            text-transform: uppercase; letter-spacing: 0.06em;
+            font-weight: 600; margin-bottom: 7px;
         }
         .login-field input {
-            width: 100%; height: 46px; padding: 0 14px;
-            background: var(--surface-2); border: 1px solid var(--border-strong);
-            color: var(--text); border-radius: 10px;
-            font-size: 16px; font-family: inherit; outline: none;
-            transition: border-color 0.2s;
+            width: 100%; height: 44px; padding: 0 13px;
+            background: var(--surface-2); border: 1px solid var(--border);
+            color: var(--text); border-radius: var(--radius-sm);
+            font-size: 14px; font-family: inherit; outline: none;
+            transition: border-color 150ms ease, box-shadow 150ms ease;
         }
-        .login-field input:focus { border-color: #8a8d96; }
+        .login-field input::placeholder { color: var(--text-muted); }
+        .login-field input:focus {
+            border-color: var(--accent);
+            box-shadow: 0 0 0 3px var(--accent-soft);
+        }
         .login-btn {
-            width: 100%; height: 48px;
-            background: #ffffff; color: #0e0f12; border: none;
-            border-radius: 10px; font-size: 15px; font-weight: 700;
-            cursor: pointer; transition: opacity 0.2s; margin-top: 8px;
+            width: 100%; height: 44px;
+            background: var(--accent); color: #ffffff; border: none;
+            border-radius: var(--radius-sm); font-size: 14px; font-weight: 600;
+            cursor: pointer; transition: background 150ms ease;
+            margin-top: 6px;
         }
-        .login-btn:hover { opacity: 0.9; }
+        .login-btn:hover:not(:disabled) { background: var(--accent-hover); }
+        .login-btn:disabled { opacity: 0.6; cursor: not-allowed; }
+        .login-error {
+            display: none;
+            margin-top: 14px; padding: 10px 12px;
+            background: rgba(255, 59, 48, 0.1);
+            border: 1px solid rgba(255, 59, 48, 0.35);
+            border-radius: var(--radius-sm);
+            color: #ff8a80; font-size: 12.5px; line-height: 1.5;
+        }
+        .login-error.visible { display: block; }
     </style>
 </head>
 <body>
     <div class="login-card">
         <div class="login-logo">S</div>
-        <div class="login-title">SelfBotMusik</div>
+        <div class="login-title">SelfBotMusic</div>
         <p class="login-sub">Sign in to your dashboard</p>
         <form class="login-form" id="loginForm">
             <div class="login-field">
-                <label>Password</label>
-                <input type="password" name="password" autocomplete="current-password" required placeholder="Enter password" />
+                <label for="password">Password</label>
+                <input id="password" type="password" name="password" autocomplete="current-password" required placeholder="Enter password" />
             </div>
             <button type="submit" class="login-btn">Sign In</button>
+            <div class="login-error" id="loginError" role="alert"></div>
         </form>
     </div>
     <script>
@@ -197,28 +215,32 @@ function buildServer(ctx) {
             e.preventDefault();
             const form = e.target;
             const btn = form.querySelector('button');
+            const errorBox = document.getElementById('loginError');
             const pwd = form.password.value;
+
+            errorBox.classList.remove('visible');
             btn.disabled = true;
-            btn.textContent = 'Signing in...';
+            btn.textContent = 'Signing in…';
             try {
                 const res = await fetch('/api/auth/login', {
                     method: 'POST',
                     headers: { 'Content-Type': 'application/json' },
                     body: JSON.stringify({ password: pwd })
                 });
-                const data = await res.json();
+                const data = await res.json().catch(() => ({}));
                 if (res.ok && data.ok) {
                     window.location.href = '/';
-                } else {
-                    alert(data.error || 'Login failed');
-                    btn.disabled = false;
-                    btn.textContent = 'Sign In';
+                    return;
                 }
+                // Inline message instead of a native alert().
+                errorBox.textContent = data.error || 'Login failed';
+                errorBox.classList.add('visible');
             } catch (err) {
-                alert('Network error: ' + err.message);
-                btn.disabled = false;
-                btn.textContent = 'Sign In';
+                errorBox.textContent = 'Network error: ' + err.message;
+                errorBox.classList.add('visible');
             }
+            btn.disabled = false;
+            btn.textContent = 'Sign In';
         });
     </script>
 </body>
@@ -240,7 +262,14 @@ function buildServer(ctx) {
     app.post("/api/auth/login", (req, res) => {
         const ip = req.ip || req.headers["x-forwarded-for"] || "?";
         if (!auth.attemptsAllowed(ip)) {
-            return res.status(429).json({ error: "Too many failed attempts. Try again in 15 minutes." });
+            // 10 failures per rolling minute; no separate lockout. Tell the client
+            // exactly when the oldest failure drops out of the window.
+            const retryAfter = auth.loginRetryAfterSeconds(ip);
+            res.set("Retry-After", String(retryAfter));
+            return res.status(429).json({
+                error: `Too many failed attempts (${auth.LOGIN_MAX_TRIES}/minute). Try again in ${retryAfter}s.`,
+                retryAfter,
+            });
         }
         const pw = req.body?.password;
         if (!pw) {
@@ -304,19 +333,42 @@ function buildServer(ctx) {
             // SAFETY: confirm guild + channel + permissions BEFORE joining.
             try { await ctx.probePermissions(rt.guildId, rt.channelId); }
             catch (e) { return res.status(400).json({ error: e.message, code: e.code || "PROBE" }); }
-            try { await ctx.ensurePoru(); } catch (e) {
-                return res.status(400).json({ error: e.message, code: e.code || "LAVA" });
+
+            // Lavalink is OPTIONAL. When it is configured but unreachable, we must
+            // still join voice so downloaded tracks can be played offline — a bad
+            // Lavalink setting should degrade to local mode, not block Connect.
+            const hasLavalinkConfig = !!(rt.lavaHost && rt.lavaPass);
+            let lavalinkUp = false;
+            let lavalinkError = null;
+            if (hasLavalinkConfig) {
+                try {
+                    await ctx.ensurePoru();
+                    const t0 = Date.now();
+                    while (!stateMod.State.connected && Date.now() - t0 < 15000) {
+                        await new Promise((r) => setTimeout(r, 200));
+                    }
+                    lavalinkUp = !!stateMod.State.connected;
+                    if (!lavalinkUp) lavalinkError = "Lavalink tidak merespons dalam 15 detik";
+                } catch (e) {
+                    lavalinkError = e.message;
+                }
+                if (!lavalinkUp) {
+                    console.warn(`⚠️  Lavalink tidak tersedia (${lavalinkError}) — melanjutkan dalam mode lokal`);
+                }
             }
-            const t0 = Date.now();
-            while (!stateMod.State.connected && Date.now() - t0 < 15000) {
-                await new Promise((r) => setTimeout(r, 200));
-            }
-            if (!stateMod.State.connected) return res.status(503).json({ error: "Lavalink did not connect (15s timeout)" });
+
             // The user wants: connect VC even if there's nothing playing yet.
             // joinVC itself is non-throwing except on permission errors.
-            await ctx.joinVC(rt.guildId, rt.channelId);
-            console.log(`🔌 Manual connect → guild=${rt.guildId} channel=${rt.channelId}`);
-            res.json({ ok: true, guildId: rt.guildId, channelId: rt.channelId, voiceConnected: true });
+            await ctx.joinVC(rt.guildId, rt.channelId, { lavalinkUp });
+            console.log(`🔌 Manual connect → guild=${rt.guildId} channel=${rt.channelId} (${lavalinkUp ? "lavalink" : "lokal"})`);
+            res.json({
+                ok: true,
+                guildId: rt.guildId,
+                channelId: rt.channelId,
+                voiceConnected: true,
+                mode: lavalinkUp ? "lavalink" : "local",
+                ...(lavalinkError ? { warning: `Mode lokal: ${lavalinkError}` } : {}),
+            });
         } catch (e) {
             console.error("api/connect:", e);
             res.status(500).json({ error: e.message, code: e.code || "JOIN" });
@@ -347,8 +399,10 @@ function buildServer(ctx) {
                 const tracks = await searchTracksFn(query, requester);
                 if (!tracks || !tracks.length) return res.status(400).json({ error: "No results" });
                 for (const info of tracks) lib.upsertFromLavalink(info);
-                const rows = tracks.map((info) => lib.findBySourceKey(`${info.sourceName}:${info.identifier}`));
-                const r = await pc.enqueue(rows, requester);
+                const rows = tracks.map((info) => lib.findBySourceKey(`${info.sourceName}:${info.identifier}`))
+                    .filter(Boolean);
+                // "Putar" means play now, not append to the end of the queue.
+                const r = await pc.playNow(rows, requester);
                 return res.json({ ok: true, track: r });
             }
             const r = await ctx.enqueue(query, requester);
@@ -420,7 +474,9 @@ function buildServer(ctx) {
     app.delete("/api/queue/:idx", async (req, res) => {
         try {
             const idx = Number(req.params.idx);
-            if (pc) return res.json({ ok: true, ...pc.removeAt(idx) });
+            // Dashboard indices start at the current track (0); the controller
+            // keeps played entries internally for QUEUE loop / history.
+            if (pc) return res.json({ ok: true, ...pc.removeAt(pc.fromUiIndex(idx)) });
             const r = await ctx.removeAt(idx);
             res.json({ ok: true, ...r });
         } catch (e) { res.status(400).json({ error: e.message }); }
@@ -507,6 +563,9 @@ function buildServer(ctx) {
 
     app.post("/api/downloads", (req, res) => {
         try {
+            // yt-dlp downloads straight from the URL already stored in tracks.uri,
+            // so a Lavalink node is NOT required — downloads stay available in
+            // offline mode.
             const ids = req.body?.trackIds;
             if (!Array.isArray(ids) || !ids.every((n) => Number.isInteger(n))) {
                 return res.status(400).json({ error: "trackIds must be an array of integers" });
@@ -542,6 +601,21 @@ function buildServer(ctx) {
         } catch (e) { res.status(400).json({ error: e.message }); }
     });
 
+    app.post("/api/queue/play-now", async (req, res) => {
+        try {
+            const ids = req.body?.trackIds;
+            if (!Array.isArray(ids) || !ids.every((n) => Number.isInteger(n))) {
+                return res.status(400).json({ error: "trackIds must be an array of integers" });
+            }
+            const requester = req.body?.requester || "Web";
+            const tracks = ids.map((id) => lib.getById(id)).filter(Boolean);
+            if (!tracks.length) return res.status(404).json({ error: "No valid tracks found" });
+            if (!pc) return res.status(503).json({ error: "Player controller not available" });
+            const r = await pc.playNow(tracks, requester);
+            res.json({ ok: true, count: tracks.length, ...r });
+        } catch (e) { res.status(400).json({ error: e.message }); }
+    });
+
     // === Tahap 2: Play Next, Shuffle, Queue Reorder, Jump ===
     app.post("/api/queue/play-next", async (req, res) => {
         try {
@@ -569,7 +643,7 @@ function buildServer(ctx) {
         try {
             const { oldIndex, newIndex } = req.body || {};
             if (!pc) return res.status(503).json({ error: "Player controller not available" });
-            res.json({ ok: true, ...pc.reorder(oldIndex, newIndex) });
+            res.json({ ok: true, ...pc.reorder(pc.fromUiIndex(oldIndex), pc.fromUiIndex(newIndex)) });
         } catch (e) { res.status(400).json({ error: e.message }); }
     });
 
@@ -577,8 +651,8 @@ function buildServer(ctx) {
         try {
             const { index } = req.body || {};
             if (!pc) return res.status(503).json({ error: "Player controller not available" });
-            await pc.jumpTo(Number(index));
-            res.json({ ok: true, index: pc.currentIndex });
+            await pc.jumpTo(pc.fromUiIndex(index));
+            res.json({ ok: true, index: Number(index) });
         } catch (e) { res.status(400).json({ error: e.message }); }
     });
 
@@ -723,16 +797,19 @@ function buildServer(ctx) {
     const server = http.createServer(app);
     const wss = new WebSocketServer({ server });
     ctx.wss = wss;
+    broadcaster.attach(wss);
     // (Removed unused seq counter — the WebSocket payload already carries 'tag'.)
     wss.on("connection", (ws) => {
         console.log("🔌 Dashboard connected");
         try { ws.send(JSON.stringify({ type: "state", tag: "init", data: stateMod.snapshot() })); } catch {}
     });
+    server.on("close", () => broadcaster.stop());
 
-    // Real state changes (play, stop, queue ops, etc.) — log once per change.
+    // Real state changes (play, stop, queue ops, etc.) — coalesced into one
+    // serialization per window instead of one per mutation.
     stateMod.emitter.on("change", onChange);
-    // Tick updates from the 500ms position ticker — silent (no log spam).
-    stateMod.emitter.on("tick", () => push("tick"));
+    // Position ticks — same coalescing path, lower priority tag.
+    stateMod.emitter.on("tick", () => broadcaster.request("tick"));
 
     // Streaming endpoint for local library files (used by internal Lavalink playback)
     app.get("/api/stream/:id", (req, res) => {

@@ -1,7 +1,7 @@
 "use strict";
 
 /**
- * SelfBotMusik — Lavalink v4 (Poru) + Web Dashboard (modular).
+ * SelfBotMusic — Lavalink v4 (Poru) + Web Dashboard (modular).
  * ---------------------------------------------------------------
  * Boot secrets only in `.env` → TOKEN_USER + WEB_PORT.
  * All runtime config (Lavalink, Guild/Channel, JWT secret, user
@@ -40,21 +40,123 @@ const poruMod = require("./modules/poru-manager");
 const playerMod = require("./modules/player");
 const webMod = require("./modules/webserver");
 const library = require("./modules/library");
+const binaries = require("./modules/binaries");
 const downloads = require("./modules/downloads");
 const uploads = require("./modules/uploads");
 const playlists = require("./modules/playlists");
 const likes = require("./modules/likes");
 const history = require("./modules/history");
 const recommendations = require("./modules/recommendations");
+const { createAutoplayService, normaliseKey } = require("./modules/autoplay");
 const PlayerController = require("./modules/player-controller");
 const { LavalinkEngine } = require("./modules/engines/lavalink");
 const { LocalEngine } = require("./modules/engines/local");
+const { joinVoiceChannel, getVoiceConnection, VoiceConnectionStatus } = require("@discordjs/voice");
+
+// --- Shared local voice connection -------------------------------------------
+// Offline (local) playback connects to voice through @discordjs/voice, while
+// Lavalink (Poru) uses the very same underlying connection registry. The
+// Connect/Disconnect buttons AND the LocalEngine must share ONE connection per
+// guild, otherwise the bot opens a second, conflicting session in the channel.
+// We keep that single connection here and hand it to the LocalEngine factory.
+let localVoiceConnection = null;
+
+/**
+ * Wait until a voice connection is actually usable.
+ *
+ * `joinVoiceChannel()` returns immediately in the "signalling" state; the
+ * connection only becomes "ready" after Discord answered with a voice server
+ * update. Playing before that point means ffmpeg decodes into a connection
+ * that never transmits — silence with no error. Waiting turns that into an
+ * explicit, reportable failure.
+ */
+async function waitForVoiceReady(conn, timeoutMs = 15000) {
+    if (!conn) return false;
+    const deadline = Date.now() + timeoutMs;
+    while (Date.now() < deadline) {
+        const status = conn.state?.status;
+        if (status === VoiceConnectionStatus.Ready) return true;
+        if (status === VoiceConnectionStatus.Destroyed) return false;
+        if (status === VoiceConnectionStatus.Disconnected) {
+            // It may still be recovering (rejoin). Give it a moment.
+            await new Promise((r) => setTimeout(r, 250));
+            continue;
+        }
+        await new Promise((r) => setTimeout(r, 150));
+    }
+    return conn.state?.status === VoiceConnectionStatus.Ready;
+}
+
+function connectLocalVoice(guildId, channelId) {
+    if (!guildId || !channelId) return null;
+    let conn = getVoiceConnection(guildId);
+    if (conn && conn.joinConfig?.channelId === channelId) {
+        localVoiceConnection = conn;
+        return conn;
+    }
+    // The bridge's adapter creator is used instead of guild.voiceAdapterCreator:
+    // it delivers the gateway packets in the order @discordjs/voice needs, so
+    // the UDP socket actually gets created.
+    conn = joinVoiceChannel({
+        guildId,
+        channelId,
+        adapterCreator: voiceBridge.adapterCreator(guildId),
+        selfDeaf: true,
+        selfMute: false
+    });
+    localVoiceConnection = conn;
+    watchVoiceConnection(conn, guildId);
+    return conn;
+}
+
+// Surface the connection lifecycle in the console. Without this a voice
+// handshake that dies is completely invisible: the bot sits in the channel
+// playing silence.
+function watchVoiceConnection(conn, guildId) {
+    if (!conn || typeof conn.on !== "function") return;
+    conn.on("stateChange", (oldState, newState) => {
+        console.log(`[voice] ${oldState.status} -> ${newState.status} (guild ${guildId})`);
+        if (newState.reason !== undefined && newState.reason !== null) {
+            console.warn(`[voice] alasan: ${newState.reason} (${VoiceConnectionStatus[newState.reason] || "tidak diketahui"})`);
+        }
+    });
+    conn.on("error", (e) => {
+        console.error(`[voice] ❌ error koneksi voice: ${e?.message || e}`);
+    });
+}
+
+function disconnectLocalVoice() {
+    try {
+        const conn = localVoiceConnection || getVoiceConnection(RuntimeSnapshot().guildId);
+        if (conn && typeof conn.destroy === "function") conn.destroy();
+    } catch (e) {
+        console.warn("[voice] local voice disconnect:", e.message);
+    }
+    localVoiceConnection = null;
+}
 
 auth.seedDefaultUser();
+
+// External binary resolution — bundled ./bin wins over configured paths so a
+// Pterodactyl container needs no absolute path setup. See modules/binaries.js.
+{
+    const bundled = binaries.bundledStatus();
+    const ffmpegPath = binaries.resolveFfmpegPath({ dbValue: db.getSetting("ffmpeg_path") });
+    const ytdlpPath = binaries.resolveYtdlpPath({ dbValue: db.getSetting("ytdlp_path") });
+    console.log(`🎬 ffmpeg : ${ffmpegPath}${bundled.ffmpeg.present ? " (bundled)" : ""}`);
+    console.log(`⬇️  yt-dlp : ${ytdlpPath}${bundled.ytdlp.present ? " (bundled)" : ""}`);
+    if (!bundled.ffmpeg.present && !bundled.ytdlp.present) {
+        console.log("   ℹ️  No bundled binaries found. Run `npm run setup:bin` for a self-contained install.");
+    }
+}
 
 function RuntimeSnapshot() { return runtimeMod.snapshot(); }
 
 const client = discordMod.createClient();
+// Install the voice bridge BEFORE any voice connection is attempted: it
+// re-orders the gateway packets so @discordjs/voice actually starts its UDP
+// socket. See modules/voice-bridge.js for the full explanation.
+const voiceBridge = require("./modules/voice-bridge").installVoiceBridge(client);
 const poru = poruMod.createPoru(client);
 poruMod.wirePoruEvents(poru, stateMod.patch);
 
@@ -100,7 +202,11 @@ async function removePoruNode() {
 let reconnectAttempts = 0;
 const MAX_RECONNECTS = 5;
 async function tryReconnectVC(reason) {
-    if (!stateMod.State.botReady || !stateMod.State.connected) return;
+    // `connected` only describes the Lavalink node. Gating rejoin on it made
+    // offline/local playback unrecoverable after a voice drop.
+    if (!stateMod.State.botReady || intentionalDisconnect) return;
+    const target = RuntimeSnapshot();
+    if (!target.guildId || !target.channelId) return;
     if (reconnectAttempts >= MAX_RECONNECTS) {
         console.warn(`⚠️  Auto-rejoin aborted (${MAX_RECONNECTS} attempts): ${reason}`);
         return;
@@ -118,8 +224,10 @@ async function tryReconnectVC(reason) {
             console.log("✅ Auto-rejoin successful (LocalEngine)");
             return;
         }
-        await leaveVC(true);
-        await new Promise((r) => setTimeout(r, 800));
+        // Rejoin WITHOUT leaveVC(): it calls playerController.disconnect(),
+        // which destroys the engine and clears the whole queue. A dropped
+        // voice session must not wipe what the user queued.
+        await new Promise((r) => setTimeout(r, 400));
         const rt = RuntimeSnapshot();
         if (!rt.guildId || !rt.channelId) return;
         await joinVC(rt.guildId, rt.channelId);
@@ -132,52 +240,83 @@ async function tryReconnectVC(reason) {
 }
 function resetReconnects() { reconnectAttempts = 0; }
 
-async function joinVC(guildId, channelId) {
+async function joinVC(guildId, channelId, { lavalinkUp } = {}) {
     if (!guildId || !channelId) {
         throw new Error("guildId and channelId are required to join a voice channel");
     }
     if (!client.user?.id && client.ws?.status !== 0) {
         await new Promise((res) => client.once("ready", res));
     }
-    if (!poru.isActivated) {
-        // Defensive: someone called joinVC before ensurePoru finished. Run it now.
-        try { await ensurePoru(); } catch (e) {
-            throw new Error("Poru not ready: " + e.message);
-        }
-    }
-    if (!poru.userId && client.user?.id) poru.userId = client.user.id;
 
-    let player = poru.players.get(guildId);
-    if (!player) {
+    const rt = RuntimeSnapshot();
+    // Callers that already probed Lavalink can pass the result; otherwise fall
+    // back to the live node state instead of trusting the config being present.
+    const hasLavalink = lavalinkUp !== undefined
+        ? lavalinkUp
+        : (!!(rt.lavaHost && rt.lavaPass) && !!stateMod.State.connected);
+
+    // Poru (Lavalink) voice connection — OPTIONAL. A missing Lavalink node must
+    // not block joining, because local/offline playback uses @discordjs/voice.
+    if (hasLavalink) {
         try {
-            player = await poru.createConnection({
-                guildId,
-                voiceChannel: channelId,
-                textChannel: channelId,
-                selfDeaf: true,
-                selfMute: false,
-            });
+            if (!poru.isActivated) await ensurePoru();
+            if (!poru.userId && client.user?.id) poru.userId = client.user.id;
+            let player = poru.players.get(guildId);
+            if (!player) {
+                try {
+                    player = await poru.createConnection({
+                        guildId,
+                        voiceChannel: channelId,
+                        textChannel: channelId,
+                        selfDeaf: true,
+                        selfMute: false,
+                    });
+                } catch (e) {
+                    // Fallback to manual createPlayer if createConnection misbehaves.
+                    console.warn("createConnection fallback:", e.message);
+                    player = await poru.createPlayer({
+                        guildId,
+                        voiceChannel: channelId,
+                        textChannel: channelId,
+                        selfDeaf: true,
+                        selfMute: false,
+                    });
+                }
+            } else if (player.voiceChannel !== channelId) {
+                player.voiceChannel = channelId;
+            }
+            // Connect properly: send the VOICE_STATE_UPDATE packet + mark connected.
+            if (typeof player.connect === "function") {
+                player.connect({ guildId, voiceChannel: channelId, deaf: true, mute: false });
+            }
         } catch (e) {
-            // Fallback to manual createPlayer if createConnection misbehaves.
-            console.warn("createConnection fallback:", e.message);
-            player = await poru.createPlayer({
-                guildId,
-                voiceChannel: channelId,
-                textChannel: channelId,
-                selfDeaf: true,
-                selfMute: false,
-            });
+            console.warn("poru join skipped (Lavalink unavailable):", e.message);
         }
-        // (Player creation log moved into poru.on("playerCreate") below.)
-    } else if (player.voiceChannel !== channelId) {
-        player.voiceChannel = channelId;
     }
-    // Connect properly: send the VOICE_STATE_UPDATE packet + mark connected.
-    if (typeof player.connect === "function") {
-        player.connect({ guildId, voiceChannel: channelId, deaf: true, mute: false });
+
+    // ONLY ONE voice owner per guild. Opening a second @discordjs/voice
+    // session here would send another VOICE_STATE_UPDATE, invalidating the
+    // Lavalink session Poru just opened — Lavalink then accepts tracks but
+    // never transmits them (position frozen at 0). So the local connection is
+    // opened only when Lavalink did NOT actually take ownership of voice —
+    // a configured-but-unreachable Lavalink still needs the local path.
+    const needLocalVoice = !hasLavalink || !stateMod.State.connected;
+    const voiceConn = needLocalVoice ? connectLocalVoice(guildId, channelId) : null;
+    if (voiceConn) {
+        // Non-blocking readiness check: a handshake that never completes is
+        // reported in the log instead of silently producing silence.
+        waitForVoiceReady(voiceConn, 12000).then((ok) => {
+            if (!ok) {
+                console.warn(
+                    `[voice] ⚠️  Koneksi voice untuk guild ${guildId} belum siap `
+                    + `(status: ${voiceConn.state?.status}) — playback offline bisa jadi tidak bersuara`
+                );
+            }
+        }).catch(() => {});
     }
+
     stateMod.patch({ voiceConnected: true, voiceChannelId: channelId, guildId, lastError: null });
-    console.log(`📥 Join VC → ${channelId} (${guildId})`);
+    console.log(`📥 Join VC → ${channelId} (${guildId})${hasLavalink ? " [poru]" : " [local]"}`);
     broadcastNow();
 }
 
@@ -265,17 +404,32 @@ let intentionalDisconnect = false;
 
 async function leaveVC(force = false, intentional = false) {
     const rt = RuntimeSnapshot();
-    const player = poru.players.get(rt.guildId);
     const isPlaying = !!(stateMod.State.playing && stateMod.State.playing.encoded);
     if (!force && isPlaying) {
         throw new Error("A track is playing — Stop first before disconnecting (use force=true to override)");
     }
     if (intentional) intentionalDisconnect = true;
+
+    // 1) The controller's active engine (LocalEngine for offline playback) owns
+    //    the REAL voice connection. Destroying it is what actually makes the bot
+    //    leave the channel — the poru player below is only the Lavalink half.
+    if (playerController) {
+        try { await playerController.disconnect(); } catch (e) {
+            console.warn("controller disconnect:", e.message);
+        }
+    }
+
+    // 2) Poru (Lavalink) player, if any.
+    const player = poru.players.get(rt.guildId);
     if (player) {
         try { player.queue.length = 0; } catch {}
         try { await player.stop(); } catch {}
         try { await player.destroy(); } catch {}
     }
+
+    // 3) The shared @discordjs/voice connection used by Connect + local playback.
+    disconnectLocalVoice();
+
     stateMod.patch({ voiceConnected: false, playing: null, queue: [], paused: false, position: 0 });
     console.log(`🎧 Leave VC (force=${force})`);
     broadcastNow();
@@ -291,6 +445,9 @@ function syncStateFromPlayer() {
             volume: Number.isFinite(snap.volume) ? snap.volume : 100,
             loop: Number.isFinite(snap.loop) ? snap.loop : 0,
             position: Number.isFinite(snap.position) ? snap.position : 0,
+            // Playback failures (e.g. a track with no usable engine) reach the
+            // dashboard here. `lastError` stays reserved for system errors.
+            playbackError: snap.lastError || null,
         });
         return;
     }
@@ -341,8 +498,11 @@ try {
             client,
             guildId: runtimeMod.Runtime.guildId,
             channelId: channelId || runtimeMod.Runtime.channelId,
-            ffmpegPath: process.env.FFMPEG_PATH || db.getSetting("ffmpeg_path") || "ffmpeg",
+            ffmpegPath: binaries.resolveFfmpegPath({ dbValue: db.getSetting("ffmpeg_path") }),
             dataDir: db.DATA_DIR,
+            // Reuse the connection the Connect button opened (if any) so playback
+            // doesn't open a second, competing session in the same channel.
+            voiceConnection: getVoiceConnection(runtimeMod.Runtime.guildId) || null,
         }),
         db: db.db,
         dataDir: db.DATA_DIR,
@@ -352,11 +512,41 @@ try {
         onIntentionalDisconnect: (v) => { intentionalDisconnect = !!v; },
         isLavalinkReady: () => !!stateMod.State.connected,
     });
-    playerController.on("state", () => broadcastNow());
-    // Autoplay provider: when queue exhausts, recommend from library
-    playerController.setAutoplayProvider((lastTrack) =>
-        recommendations.onTrackEnd(lastTrack, playerController)
-    );
+    // The controller is the source of truth while it owns playback. Without
+    // syncing here the WebSocket kept broadcasting a stale State (playing:null),
+    // so the dashboard greyed out play/skip even though audio was running.
+    playerController.on("state", () => syncStateFromPlayer());
+    // Autoplay: similar candidates are prepared while a track plays, so the
+    // next one is ready the moment the explicit queue runs out. An explicitly
+    // queued track always takes priority (see PlayerController.next).
+    const autoplay = createAutoplayService({
+        isLavalinkReady: () => !!stateMod.State.connected,
+        getActiveKeys: () => playerController.queue.map((i) => normaliseKey(i.track)),
+        getLibraryCandidates: async (seed) => recommendations.getRecommendations(
+            seed ? { id: seed.id, title: seed.title, artist: seed.artist || seed.author } : null,
+            { limit: 20 }
+        ),
+        searchOnline: async (query) => {
+            const { tracks } = await playerMod.searchTracksAuto(poru, query, "Autoplay", ["ytmsearch"]);
+            return (tracks || []).map((t) => ({
+                title: t.info?.title || "Unknown",
+                artist: t.info?.author || "",
+                uri: t.info?.uri || "",
+                identifier: t.info?.identifier || "",
+                source_key: t.info?.sourceName && t.info?.identifier
+                    ? `${t.info.sourceName}:${t.info.identifier}` : "",
+                encoded: t.track || "",
+                duration_ms: t.info?.length || 0,
+                thumbnail: t.info?.artworkUrl || "",
+                source_type: "lavalink",
+            })).filter((t) => t.title && t.title !== "Unknown");
+        },
+    });
+    playerController.setAutoplayProvider((lastTrack) => autoplay.take(lastTrack));
+    playerController.setAutoplayPrefetcher((seed) => {
+        autoplay.notePlayed(seed);
+        return autoplay.prepare(seed);
+    });
 } catch (e) {
     console.error("⚠️  PlayerController init failed, falling back to legacy player:", e.message);
     playerController = null;
@@ -473,16 +663,32 @@ discordMod.wireSafetyEvents(client, {
             for (const t of tracks) {
                 try { library.upsertFromLavalink(t.info); } catch {}
             }
+            // The DB row is metadata only. Carry the base64 Lavalink track from
+            // the search result into the queue item, otherwise LavalinkEngine
+            // has to re-resolve by title (and Poru may silently play nothing).
             const rows = tracks
-                .map((t) => library.findBySourceKey(`${t.info.sourceName}:${t.info.identifier}`))
+                .map((t) => {
+                    const row = library.findBySourceKey(`${t.info.sourceName}:${t.info.identifier}`);
+                    return row ? { ...row, encoded: t.track || row.encoded || "" } : null;
+                })
                 .filter(Boolean);
             if (!rows.length) return { error: "Gagal menyimpan hasil pencarian" };
+
+            let result = null;
             if (playerController) {
-                await playerController.enqueue(rows, requester);
+                result = await playerController.enqueue(rows, requester);
             } else {
                 await ctx.enqueue(query, requester);
             }
-            return { ok: true, title: rows[0]?.title || query, playlistName, count: rows.length };
+            return {
+                ok: true,
+                title: rows[0]?.title || query,
+                playlistName,
+                count: rows.length,
+                queued: !!result?.queued,
+                playing: !!result?.playing,
+                queuePosition: result?.queuePosition ?? null,
+            };
         } catch (err) {
             return { error: err.message };
         }
@@ -494,7 +700,44 @@ server.listen(WEB_PORT, () => {
     console.log(`🌐 Dashboard ready on http://localhost:${WEB_PORT}`);
 });
 
-setInterval(() => stateMod.tick(ctx.getPlayer), 500);
+// Current playback position, whatever engine is driving it.
+// The old ticker only asked Poru, so local (ffmpeg) playback always reported
+// 0 and the progress bar never moved.
+function currentPositionMs() {
+    const engine = playerController?.currentEngine;
+    if (engine && typeof engine.getPositionMs === "function") {
+        try { return engine.getPositionMs() || 0; } catch { return 0; }
+    }
+    const poruPlayer = poru.players.get(RuntimeSnapshot().guildId);
+    return typeof poruPlayer?.position === "number" ? poruPlayer.position : 0;
+}
+
+setInterval(() => stateMod.tick(() => ({ position: currentPositionMs() })), 500);
+
+// Memory watchdog. One compact line per interval makes an OOM diagnosable
+// from the panel console: a rising `ext` points at buffered sockets or
+// native allocations, a rising `heap` points at retained JS objects.
+// Set MEMORY_LOG_MS=0 to silence it.
+const MEMORY_LOG_MS = Number(process.env.MEMORY_LOG_MS ?? 600000);
+if (MEMORY_LOG_MS > 0) {
+    const v8 = require("v8");
+    const toMb = (bytes) => (bytes / 1048576).toFixed(0);
+    setInterval(async () => {
+        const mem = process.memoryUsage();
+        const heap = v8.getHeapStatistics();
+        const ws = ctx.wss?.clients?.size ?? 0;
+        let diskFree = "n/a";
+        try {
+            const free = await library.freeDiskBytes();
+            if (free !== null) diskFree = `${toMb(free)}MB`;
+        } catch { /* statfs unavailable */ }
+        console.log(
+            `📊 mem rss=${toMb(mem.rss)}MB heap=${toMb(mem.heapUsed)}/${toMb(heap.heap_size_limit)}MB ` +
+            `ext=${toMb(mem.external)}MB ab=${toMb(mem.arrayBuffers)}MB ` +
+            `ws=${ws} queue=${stateMod.State.queue?.length ?? 0} disk_free=${diskFree}`
+        );
+    }, MEMORY_LOG_MS).unref();
+}
 
 client.once("ready", async () => {
     console.log(`🔥 Login OK: ${client.user.tag} (${client.user.id})`);

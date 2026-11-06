@@ -4,9 +4,13 @@
     "description": "Discord music selfbot with Lavalink + a secure SQLite-backed web dashboard.",
     "main": "index.js",
     "scripts": {
-        "start": "node index.js",
+        "start": "node --max-old-space-size=160 index.js",
+        "start:plain": "node index.js",
         "dev": "node index.js",
-        "test": "node --test test/**/*.test.js"
+        "test": "node --test test/**/*.test.js",
+        "setup:bin": "node scripts/fetch-binaries.js",
+        "update:bin": "node scripts/fetch-binaries.js --force",
+        "postinstall": "node scripts/fetch-binaries.js --quiet"
     },
     "keywords": [
         "discord",
@@ -20,7 +24,7 @@
     "author": "",
     "license": "MIT",
     "dependencies": {
-        "@discordjs/voice": "^0.18.0",
+        "@discordjs/voice": "^0.19.2",
         "bcryptjs": "^3.0.3",
         "better-sqlite3": "^12.11.1",
         "busboy": "^1.6.0",

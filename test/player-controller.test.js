@@ -61,7 +61,7 @@ function createTempDir() {
     return tmp;
 }
 
-test("1. enqueue local track: selects LocalEngine and calls play", async () => {
+test("1. enqueue local track: one voice owner per session", async () => {
     const tmpDir = createTempDir();
     const localFile = path.join(tmpDir, "library", "1.mp3");
     fs.writeFileSync(localFile, "fake audio");
@@ -70,8 +70,17 @@ test("1. enqueue local track: selects LocalEngine and calls play", async () => {
     let localEngine = null;
     let lavalinkCreated = 0;
 
-    const controller = new PlayerController({
+    const track = {
+        id: 1,
+        title: "Local Track 1",
+        artist: "Artist 1",
+        file_path: "1.mp3",
+        duration_ms: 180000
+    };
+
+    const makeController = (isLavalinkReady) => new PlayerController({
         dataDir: tmpDir,
+        isLavalinkReady,
         createLocalEngine: () => {
             localCreated++;
             localEngine = new MockEngine("local");
@@ -83,25 +92,27 @@ test("1. enqueue local track: selects LocalEngine and calls play", async () => {
         }
     });
 
-    const track = {
-        id: 1,
-        title: "Local Track 1",
-        artist: "Artist 1",
-        file_path: "1.mp3",
-        duration_ms: 180000
-    };
-
+    // Lavalink UP: one engine for the whole session, even for a local file.
+    // That avoids destroying/recreating the voice connection on every skip.
+    const controller = makeController(() => true);
     const res = await controller.enqueue([track], "user#0001");
 
     assert.equal(res.queued, false);
     assert.equal(res.playing, true);
     assert.equal(res.queuePosition, 0);
-    assert.equal(localCreated, 1);
-    assert.equal(lavalinkCreated, 0);
-    assert.equal(controller.currentEngineType, "local");
-    assert.equal(localEngine.playedTrack.title, "Local Track 1");
+    assert.equal(lavalinkCreated, 1);
+    assert.equal(localCreated, 0);
+    assert.equal(controller.currentEngineType, "lavalink");
     assert.equal(controller.queue.length, 1);
     assert.equal(controller.currentIndex, 0);
+
+    // Lavalink DOWN: only a file on disk can play, so LocalEngine takes over.
+    const offlineController = makeController(() => false);
+    await offlineController.enqueue([track], "user#0001");
+    assert.equal(localCreated, 1);
+    assert.equal(lavalinkCreated, 1);
+    assert.equal(offlineController.currentEngineType, "local");
+    assert.equal(localEngine.playedTrack.title, "Local Track 1");
 
     fs.rmSync(tmpDir, { recursive: true, force: true });
 });
@@ -141,7 +152,7 @@ test("2. enqueue online track: selects LavalinkEngine and calls play", async () 
     assert.equal(lavalinkEngine.playedTrack.title, "Online Stream");
 });
 
-test("3. Handoff: song 1 local, song 2 lavalink -> destroys LocalEngine, marks intentionalDisconnect, creates LavalinkEngine", async () => {
+test("3. Handoff with Lavalink down: local track on LocalEngine, then Lavalink comes up -> handoff to LavalinkEngine", async () => {
     const tmpDir = createTempDir();
     const localFile = path.join(tmpDir, "library", "local1.mp3");
     fs.writeFileSync(localFile, "local audio bytes");
@@ -149,9 +160,11 @@ test("3. Handoff: song 1 local, song 2 lavalink -> destroys LocalEngine, marks i
     let intentionalDisconnectCalls = [];
     let localEngine = null;
     let lavalinkEngine = null;
+    let lavalinkUp = false;
 
     const controller = new PlayerController({
         dataDir: tmpDir,
+        isLavalinkReady: () => lavalinkUp,
         onIntentionalDisconnect: (flag) => {
             intentionalDisconnectCalls.push(flag);
         },
@@ -168,14 +181,15 @@ test("3. Handoff: song 1 local, song 2 lavalink -> destroys LocalEngine, marks i
     const localTrack = { title: "Song 1 Local", file_path: "local1.mp3" };
     const onlineTrack = { title: "Song 2 Lavalink", uri: "https://yt.com/watch?v=2" };
 
-    // Enqueue both tracks
+    // Lavalink is down: local track plays on LocalEngine
     await controller.enqueue([localTrack, onlineTrack], "dj#0001");
 
     assert.equal(controller.currentEngineType, "local");
     assert.equal(localEngine.playedTrack.title, "Song 1 Local");
     assert.equal(localEngine.destroyed, false);
 
-    // Now advance to song 2 (next)
+    // Lavalink becomes available, then advance to song 2
+    lavalinkUp = true;
     await controller.next();
 
     assert.equal(localEngine.destroyed, true, "LocalEngine should be destroyed during handoff");
@@ -470,20 +484,27 @@ test("11. playCurrent updates play_count and last_played_at in database", async 
 
 test("12. TRACK loop with unplayable track: skips forward instead of infinite loop", async () => {
     const tmpDir = createTempDir();
-    const brokenFile = path.join(tmpDir, "library", "1.mp3"); // file_path set but missing on disk
+
+    // Engine that refuses one specific track, like a dead source.
+    class PickyEngine extends MockEngine {
+        async play(trackRow, options = {}) {
+            if (trackRow.title === "Broken") throw new Error("source unavailable");
+            return super.play(trackRow, options);
+        }
+    }
 
     let lavalinkEngine = null;
     const controller = new PlayerController({
         dataDir: tmpDir,
         createLavalinkEngine: () => {
-            lavalinkEngine = new MockEngine("lavalink");
+            lavalinkEngine = new PickyEngine("lavalink");
             return lavalinkEngine;
         }
     });
 
     controller.setLoop(1); // TRACK
 
-    const unplayable = { title: "Broken", file_path: "1.mp3" }; // file missing on disk
+    const unplayable = { title: "Broken", uri: "https://yt.com/broken" };
     const ok = { title: "Good Song", uri: "https://yt.com/good" };
     await controller.enqueue([unplayable, ok], "user");
 
@@ -561,7 +582,7 @@ test("15. QUEUE loop + single unplayable track: stops cleanly instead of infinit
     assert(controller.lastError !== null, "lastError should record the skip");
 });
 
-test("17. stop() drops the engine: next enqueue re-runs the factory and plays", async () => {
+test("17. stop() keeps the voice session: only disconnect() destroys the engine", async () => {
     let lavalinkCreated = 0;
     let lavalinkEngine = null;
 
@@ -577,17 +598,22 @@ test("17. stop() drops the engine: next enqueue re-runs the factory and plays", 
     assert.equal(lavalinkCreated, 1);
 
     await controller.stop();
-    assert.equal(controller.currentEngine, null, "Engine should be dropped on stop");
-    assert.equal(controller.currentEngineType, null);
+    assert.notEqual(controller.currentEngine, null, "a natural stop must keep the bot in voice");
+    assert.equal(lavalinkEngine.stopped, true);
 
-    // /api/stop (pc path) also tears down the Poru player via leaveVC —
-    // the next play must re-run the factory to rejoin, not reuse the engine.
+    // A new track reuses the same engine/voice session — no leave + rejoin.
     await controller.enqueue([{ title: "T2", uri: "https://yt.com/2" }], "user");
-    assert.equal(lavalinkCreated, 2, "Factory must re-run after stop");
+    assert.equal(lavalinkCreated, 1, "no new engine/voice connection after a natural stop");
     assert.equal(lavalinkEngine.playedTrack.title, "T2", "Playback should work after stop");
+
+    // The Stop button goes through disconnect(), which is the only path that
+    // tears down the voice connection.
+    await controller.disconnect();
+    assert.equal(controller.currentEngine, null);
+    assert.equal(lavalinkEngine.destroyed, true);
 });
 
-test("16. Handoff lavalink -> local -> lavalink: factory re-runs and second lavalink track plays", async () => {
+test("16. Lavalink down mid-queue: local handoff works; Lavalink returns -> handoff back with factory re-run", async () => {
     const tmpDir = createTempDir();
     const localFile = path.join(tmpDir, "library", "mid.mp3");
     fs.writeFileSync(localFile, "local audio bytes");
@@ -595,9 +621,11 @@ test("16. Handoff lavalink -> local -> lavalink: factory re-runs and second lava
     let lavalinkCreated = 0;
     let lavalinkEngine = null;
     let localEngine = null;
+    let lavalinkUp = true;
 
     const controller = new PlayerController({
         dataDir: tmpDir,
+        isLavalinkReady: () => lavalinkUp,
         // Simulates index.js: LavalinkEngine.destroy() kills the Poru player,
         // so the factory must recreate it before returning a new engine.
         createLavalinkEngine: async () => {
@@ -619,13 +647,15 @@ test("16. Handoff lavalink -> local -> lavalink: factory re-runs and second lava
     assert.equal(lavalinkCreated, 1);
     assert.equal(lavalinkEngine.playedTrack.title, "Lava 1");
 
-    // Local track handoff
+    // Lavalink goes down; the local track takes over on LocalEngine
+    lavalinkUp = false;
     lavalinkEngine.emit("end", { reason: "finished" });
     await new Promise((r) => setImmediate(r));
     assert.equal(controller.currentEngineType, "local");
     assert.equal(localEngine.playedTrack.title, "Local Mid");
 
-    // Back to lavalink: factory must be called again (player recreated) and play
+    // Lavalink returns: handoff back, factory must be called again (player recreated)
+    lavalinkUp = true;
     localEngine.emit("end", { reason: "finished" });
     await new Promise((r) => setImmediate(r));
 
@@ -634,4 +664,101 @@ test("16. Handoff lavalink -> local -> lavalink: factory re-runs and second lava
     assert.equal(lavalinkEngine.playedTrack.title, "Lava 3", "Second lavalink track should play, not be skipped");
 
     fs.rmSync(tmpDir, { recursive: true, force: true });
+});
+
+test("18. played tracks are compacted so the queue cannot grow for the whole uptime", async () => {
+    const tmpDir = createTempDir();
+    const controller = new PlayerController({
+        dataDir: tmpDir,
+        createLavalinkEngine: () => new MockEngine("lavalink"),
+    });
+
+    const tracks = Array.from({ length: 200 }, (_, i) => ({
+        id: i + 1,
+        title: `Track ${i}`,
+        source_type: "lavalink",
+        uri: `https://example.com/${i}`,
+    }));
+
+    await controller.enqueue(tracks);
+    assert.equal(controller.queue.length, 200);
+
+    for (let i = 0; i < 150; i += 1) {
+        await controller.next();
+    }
+
+    // 150 of 200 tracks have been consumed; the array must have shed them
+    // instead of holding every track ever played.
+    assert.ok(
+        controller.queue.length < 100,
+        `queue should shrink after playback, got ${controller.queue.length}`
+    );
+
+    // Compaction must not shift the wrong track into the current slot.
+    const playing = controller.queue[controller.currentIndex];
+    assert.ok(playing, "currentIndex must still point at a valid entry");
+    assert.equal(playing.track.id, tracks[150].id, "the 151st track must be the one playing");
+
+    await controller.stop();
+    assert.equal(controller.queue.length, 0, "stop() still clears everything");
+
+    fs.rmSync(tmpDir, { recursive: true, force: true });
+});
+
+// --- Voice session ownership -------------------------------------------------
+// Offline (local) playback connects to voice through the LocalEngine, not
+// through Poru. So "disconnect" only works if the controller DESTROYS the
+// active engine — `stop()` alone silences playback but leaves the bot sitting
+// in the voice channel.
+
+test("19. disconnect() destroys the active engine so the bot leaves the voice channel", async () => {
+    const controller = new PlayerController({
+        createLavalinkEngine: () => new MockEngine("lavalink"),
+        isLavalinkReady: () => true,
+    });
+
+    await controller.enqueue([{ id: 91, title: "Offline Song", uri: "u", encoded: "e" }], "user");
+    const engine = controller.currentEngine;
+    assert.ok(engine, "an engine should be live after enqueue");
+    assert.equal(engine.destroyed, false, "engine starts alive");
+
+    await controller.disconnect();
+
+    assert.equal(engine.destroyed, true, "disconnect must destroy the engine (it owns the voice connection)");
+    assert.equal(controller.currentEngine, null, "engine reference must be dropped");
+    assert.equal(controller.currentEngineType, null);
+    assert.equal(controller.queue.length, 0, "queue must be cleared");
+    assert.equal(controller.currentIndex, -1);
+    assert.equal(controller.paused, false);
+});
+
+test("20. stop() alone does NOT destroy the engine (voice session stays open)", async () => {
+    const controller = new PlayerController({
+        createLavalinkEngine: () => new MockEngine("lavalink"),
+        isLavalinkReady: () => true,
+    });
+
+    await controller.enqueue([{ id: 92, title: "Song", uri: "u", encoded: "e" }], "user");
+    const engine = controller.currentEngine;
+
+    await controller.stop();
+
+    assert.equal(engine.destroyed, false, "stop() must not tear down the voice connection");
+    assert.equal(engine.stopped, true, "stop() still stops playback");
+});
+
+test("21. an online track with no Lavalink node is skipped with an actionable error", async () => {
+    const controller = new PlayerController({
+        isLavalinkReady: () => false,
+        createLavalinkEngine: () => { throw new Error("Lavalink not configured"); },
+    });
+
+    await controller.enqueue([{ id: 93, title: "Online Song", uri: "https://yt.com/x" }], "user");
+
+    assert.ok(controller.lastError, "the failure must be recorded");
+    assert.match(
+        controller.lastError.message,
+        /Lavalink/i,
+        "the error should tell the user Lavalink is the missing piece"
+    );
 });

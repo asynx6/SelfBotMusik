@@ -16,6 +16,7 @@ export function PlayerProvider({ children }) {
     voiceChannelId: "",
     guildId: "",
     lastError: null,
+    playbackError: null,
     loop: 0,
     needsSetup: false,
   });

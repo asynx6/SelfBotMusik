@@ -1,4 +1,4 @@
-import React from "react";
+import React, { useEffect, useRef, useState } from "react";
 import {
   Play,
   Pause,
@@ -10,9 +10,11 @@ import {
   Shuffle,
   Heart,
   Music2,
-  Radio
+  Radio,
+  AlertCircle
 } from "lucide-react";
 import { usePlayer } from "../context/PlayerContext";
+import { useIsMobile } from "../hooks/useMediaQuery";
 import { api } from "../services/api";
 
 function formatTime(ms) {
@@ -23,9 +25,24 @@ function formatTime(ms) {
   return `${m}:${s < 10 ? "0" : ""}${s}`;
 }
 
+const VOLUME_MIN = 0;
+const VOLUME_MAX = 200;
+
+function clampVolume(value) {
+  if (value === null || value === undefined || value === "") return 100;
+  const n = Number(value);
+  if (!Number.isFinite(n)) return 100;
+  return Math.min(VOLUME_MAX, Math.max(VOLUME_MIN, Math.round(n)));
+}
+
 export default function BottomPlayer() {
   const { state } = usePlayer();
+  const isMobile = useIsMobile();
   const current = state.playing;
+
+  const progressPct = current?.duration
+    ? Math.min(100, (state.position / current.duration) * 100)
+    : 0;
 
   const handleTogglePlay = async () => {
     try {
@@ -68,16 +85,199 @@ export default function BottomPlayer() {
     }
   };
 
-  const handleVolume = async (e) => {
-    try {
-      await api.setVolume(Number(e.target.value));
-    } catch (err) {
-      console.error(err);
+  // Volume is a controlled input backed by the WebSocket, so a plain onChange
+  // fights the user: the thumb snaps back to the stale server value between
+  // round-trips. Keep a local draft and release it once the server agrees.
+  const [volumeDraft, setVolumeDraft] = useState(null);
+  const [volumeText, setVolumeText] = useState(null);
+  const commitTimer = useRef(null);
+  const draftTimer = useRef(null);
+  const lastAudibleRef = useRef(clampVolume(state.volume));
+
+  const serverVolume = clampVolume(state.volume);
+  const displayVolume = volumeDraft ?? serverVolume;
+  const volumePct = (displayVolume / VOLUME_MAX) * 100;
+  const volumeLabel = volumeText ?? String(displayVolume);
+
+  useEffect(() => {
+    if (volumeDraft !== null && serverVolume === volumeDraft) {
+      setVolumeDraft(null);
+      clearTimeout(draftTimer.current);
     }
+  }, [serverVolume, volumeDraft]);
+
+  useEffect(() => {
+    if (serverVolume > 0) lastAudibleRef.current = serverVolume;
+  }, [serverVolume]);
+
+  useEffect(() => () => {
+    clearTimeout(commitTimer.current);
+    clearTimeout(draftTimer.current);
+  }, []);
+
+  // One writer for the slider, keyboard arrows, numeric field and mute button.
+  // The short debounce coalesces a drag into one request while the local draft
+  // keeps the thumb responsive instead of waiting for the round-trip.
+  const commitVolume = (value) => {
+    const next = clampVolume(value);
+    setVolumeDraft(next);
+    setVolumeText(null);
+    if (next > 0) lastAudibleRef.current = next;
+
+    clearTimeout(commitTimer.current);
+    commitTimer.current = setTimeout(() => {
+      api.setVolume(next).catch((err) => console.error(err));
+    }, 90);
+
+    // A lost request must not leave the UI stuck on an unconfirmed value.
+    clearTimeout(draftTimer.current);
+    draftTimer.current = setTimeout(() => setVolumeDraft(null), 1500);
   };
 
+  const handleVolumeInput = (e) => commitVolume(e.target.value);
+
+  const handleVolumeNumber = (e) => {
+    const raw = e.target.value;
+    if (raw.trim() === "") {
+      setVolumeText(raw); // mid-edit: keep the field empty, do not commit yet
+      return;
+    }
+    commitVolume(raw);
+    setVolumeText(String(clampVolume(raw))); // normalise "001" / "-5" while typing
+  };
+
+  const handleVolumeNumberBlur = () => setVolumeText(null);
+
+  const handleToggleMute = () => {
+    commitVolume(displayVolume > 0 ? 0 : (lastAudibleRef.current || 100));
+  };
+
+  // A track that could not play used to fail silently (the bot just skipped it).
+  // Surface the reason so "bot nya ga nyanyi" is explainable instead of mysterious.
+  const activeError = state.playbackError || state.lastError;
+  const errorBanner = activeError ? (
+    <div
+      role="alert"
+      style={{
+        position: "fixed",
+        left: 16,
+        right: 16,
+        bottom: isMobile ? 72 : 92,
+        zIndex: 120,
+        padding: "10px 14px",
+        borderRadius: "var(--radius-sm)",
+        background: "rgba(255, 77, 77, 0.12)",
+        border: "1px solid rgba(255, 77, 77, 0.35)",
+        color: "#ff8f8f",
+        fontSize: 12,
+        lineHeight: 1.45,
+        display: "flex",
+        alignItems: "flex-start",
+        gap: 8,
+        pointerEvents: "none",
+      }}
+    >
+      <AlertCircle size={14} style={{ flexShrink: 0, marginTop: 1 }} />
+      <span>{activeError}</span>
+    </div>
+  ) : null;
+
+  // Phone layout: one row, primary controls only, progress as a hairline on
+  // top. The desktop three-column layout cannot fit under ~900px.
+  if (isMobile) {
+    return (
+      <>
+        {errorBanner}
+        <div style={{
+        position: "fixed",
+        bottom: 0,
+        left: 0,
+        right: 0,
+        height: 64,
+        zIndex: 100,
+        background: "var(--bg-secondary)",
+        borderTop: "1px solid var(--border)",
+      }}>
+        <div role="progressbar" aria-valuemin={0} aria-valuemax={100} aria-valuenow={Math.round(progressPct)} aria-label="Posisi lagu" style={{ position: "absolute", top: 0, left: 0, right: 0, height: 2, background: "var(--border)" }}>
+          <div style={{ width: `${progressPct}%`, height: "100%", background: "var(--accent)" }} />
+        </div>
+
+        <div style={{ display: "flex", alignItems: "center", gap: 10, height: "100%", padding: "0 10px" }}>
+          <div style={{
+            width: 40,
+            height: 40,
+            borderRadius: "var(--radius-sm)",
+            background: "var(--bg-tertiary)",
+            display: "flex",
+            alignItems: "center",
+            justifyContent: "center",
+            overflow: "hidden",
+            flexShrink: 0,
+          }}>
+            {current?.thumbnail ? (
+              <img src={current.thumbnail} alt={current.title} style={{ width: "100%", height: "100%", objectFit: "cover" }} />
+            ) : (
+              <Music2 size={18} color="var(--fg-muted)" />
+            )}
+          </div>
+
+          <div style={{ flex: 1, minWidth: 0 }}>
+            <div style={{ fontWeight: 600, fontSize: 13, whiteSpace: "nowrap", overflow: "hidden", textOverflow: "ellipsis" }}>
+              {current ? current.title : "Tidak ada yang diputar"}
+            </div>
+            <div style={{ fontSize: 11, color: "var(--fg-secondary)", whiteSpace: "nowrap", overflow: "hidden", textOverflow: "ellipsis" }}>
+              {current
+                ? `${current.author} · ${formatTime(state.position)} / ${formatTime(current.duration)}`
+                : "—"}
+            </div>
+          </div>
+
+          <button
+            onClick={handleToggleMute}
+            title={displayVolume === 0 ? "Nyalakan Suara" : "Bisukan"}
+            aria-label={displayVolume === 0 ? "Nyalakan Suara" : "Bisukan"}
+            style={{ padding: 8, flexShrink: 0, color: "var(--fg-secondary)" }}
+          >
+            {displayVolume === 0 ? <VolumeX size={18} color="var(--error)" /> : <Volume2 size={18} />}
+          </button>
+
+          <button
+            onClick={handleTogglePlay}
+            disabled={!current}
+            aria-label={state.paused ? "Lanjutkan" : "Jeda"}
+            style={{
+              width: 40,
+              height: 40,
+              borderRadius: "50%",
+              flexShrink: 0,
+              background: current ? "var(--accent)" : "var(--border)",
+              color: "#fff",
+              display: "flex",
+              alignItems: "center",
+              justifyContent: "center",
+            }}
+          >
+            {!current || state.paused ? <Play size={18} fill="#fff" /> : <Pause size={18} fill="#fff" />}
+          </button>
+
+          <button
+            onClick={handleSkip}
+            disabled={!current}
+            aria-label="Lewati lagu"
+            style={{ padding: 8, flexShrink: 0, color: current ? "var(--fg-primary)" : "var(--fg-muted)" }}
+          >
+            <SkipForward size={20} />
+          </button>
+        </div>
+      </div>
+      </>
+    );
+  }
+
   return (
-    <div style={{
+    <>
+      {errorBanner}
+      <div style={{
       height: 84,
       background: "var(--bg-secondary)",
       borderTop: "1px solid var(--border)",
@@ -147,7 +347,7 @@ export default function BottomPlayer() {
               cursor: current ? "pointer" : "default",
             }}
           >
-            {state.paused ? <Play size={18} fill="#fff" /> : <Pause size={18} fill="#fff" />}
+            {!current || state.paused ? <Play size={18} fill="#fff" /> : <Pause size={18} fill="#fff" />}
           </button>
 
           <button
@@ -189,7 +389,7 @@ export default function BottomPlayer() {
           <span style={{ fontSize: 11, color: "var(--fg-muted)", minWidth: 35, textAlign: "right" }}>
             {formatTime(state.position)}
           </span>
-          <div style={{
+          <div role="progressbar" aria-valuemin={0} aria-valuemax={100} aria-valuenow={Math.round(progressPct)} aria-label="Posisi lagu" style={{
             flex: 1,
             height: 4,
             background: "var(--border)",
@@ -198,7 +398,7 @@ export default function BottomPlayer() {
             overflow: "hidden",
           }}>
             <div style={{
-              width: current?.duration ? `${Math.min(100, (state.position / current.duration) * 100)}%` : "0%",
+              width: `${progressPct}%`,
               height: "100%",
               background: "var(--accent)",
               borderRadius: 2,
@@ -214,28 +414,63 @@ export default function BottomPlayer() {
       <div style={{ display: "flex", alignItems: "center", gap: 16, width: "30%", justifyContent: "flex-end" }}>
         <div style={{ display: "flex", alignItems: "center", gap: 6, fontSize: 12, color: state.voiceConnected ? "var(--success)" : "var(--fg-muted)" }}>
           <Radio size={14} />
-          <span>{state.voiceConnected ? "Terhubung ke Voice" : "Terputus"}</span>
+          <span className="voice-status-label">{state.voiceConnected ? "Terhubung ke Voice" : "Terputus"}</span>
         </div>
 
         <div style={{ display: "flex", alignItems: "center", gap: 8 }}>
-          {state.volume === 0 ? (
-            <VolumeX size={18} color="var(--fg-muted)" />
-          ) : (
-            <Volume2 size={18} color="var(--fg-secondary)" />
-          )}
+          <button
+            onClick={handleToggleMute}
+            title={displayVolume === 0 ? "Nyalakan Suara" : "Bisukan"}
+            aria-label={displayVolume === 0 ? "Nyalakan Suara" : "Bisukan"}
+            style={{ padding: 4, display: "flex", color: "var(--fg-secondary)" }}
+          >
+            {displayVolume === 0 ? (
+              <VolumeX size={18} color="var(--error)" />
+            ) : (
+              <Volume2 size={18} />
+            )}
+          </button>
           <input
             type="range"
-            min="0"
-            max="200"
-            value={state.volume}
-            onChange={handleVolume}
-            style={{ width: 90, height: 4, cursor: "pointer", accentColor: "var(--accent)" }}
+            className="volume-slider"
+            min={VOLUME_MIN}
+            max={VOLUME_MAX}
+            step={1}
+            value={displayVolume}
+            onChange={handleVolumeInput}
+            onKeyDown={() => setVolumeText(null)}
+            aria-label="Volume"
+            aria-valuemin={VOLUME_MIN}
+            aria-valuemax={VOLUME_MAX}
+            aria-valuenow={displayVolume}
+            aria-valuetext={`${displayVolume}%`}
+            title={`Volume ${displayVolume}% — geser, atau fokus lalu tekan ←/→ untuk naik/turun 1%`}
+            style={{
+              "--volume-fill": `${volumePct}%`,
+              "--volume-thumb": displayVolume === 0 ? "var(--fg-muted)" : "var(--accent)",
+            }}
           />
-          <span style={{ fontSize: 11, color: "var(--fg-muted)", width: 28, textAlign: "right" }}>
-            {state.volume}%
-          </span>
+          <div style={{ display: "flex", alignItems: "center", gap: 1 }}>
+            <input
+              className="volume-number"
+              type="number"
+              min={VOLUME_MIN}
+              max={VOLUME_MAX}
+              step={1}
+              value={volumeLabel}
+              onChange={handleVolumeNumber}
+              onBlur={handleVolumeNumberBlur}
+              onKeyDown={(e) => {
+                if (e.key === "Enter") e.currentTarget.blur();
+              }}
+              aria-label="Nilai volume 0 sampai 200"
+              title="Ketik angka 0–200 untuk nilai persis (mis. 1)"
+            />
+            <span style={{ fontSize: 11, color: "var(--fg-muted)" }}>%</span>
+          </div>
         </div>
       </div>
     </div>
+    </>
   );
 }

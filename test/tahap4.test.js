@@ -42,7 +42,7 @@ test("Recommendations: scoring weights applied correctly", () => {
     assert.equal(s5, WEIGHTS.LIBRARY_BASE + WEIGHTS.SAME_ARTIST_BONUS);
 });
 
-test("Autoplay: onTrackEnd queues a recommendation via playNext", async () => {
+test("Autoplay: onTrackEnd returns a recommendation without mutating the queue", async () => {
     const db = setupTestDb();
     db.prepare("INSERT INTO tracks (id, source_key, source_type, title, artist, created_at, play_count) VALUES (1, 'k1', 'lavalink', 'Song A', 'Artist A', 1, 5)").run();
     db.prepare("INSERT INTO tracks (id, source_key, source_type, title, artist, created_at, play_count) VALUES (2, 'k2', 'lavalink', 'Song B', 'Artist A', 2, 3)").run();
@@ -65,13 +65,15 @@ test("Autoplay: onTrackEnd queues a recommendation via playNext", async () => {
 
     // Manually set autoplay provider (index.js does this at boot)
     const { onTrackEnd } = require("../modules/recommendations");
-    pc.setAutoplayProvider((lastTrack) => onTrackEnd(lastTrack, pc));
+    pc.setAutoplayProvider((lastTrack) => onTrackEnd(lastTrack, pc, { customDb: db }));
 
     const currentTrack = { id: 1, title: "Song A", artist: "Artist A" };
-    const nextTrack = await onTrackEnd(currentTrack, pc);
+    // Pass the test database explicitly: without it the recommender reads the
+    // real data/app.sqlite, which makes this test depend on unrelated state.
+    const nextTrack = await onTrackEnd(currentTrack, pc, { customDb: db });
 
     // Should have recommended a track from library
     assert(nextTrack !== null, "Should have found a recommendation");
     assert(nextTrack.id !== currentTrack.id, "Should not recommend the current track itself");
-    assert.equal(pc.queue.length, 1, "Recommendation should be queued via playNext");
+    assert.equal(pc.queue.length, 0, "the controller owns queue insertion; no duplicate");
 });

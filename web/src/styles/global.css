@@ -16,6 +16,7 @@
   --border: #333333;
   --border-hover: #404040;
 
+  --like: #ff4d8d;
   --success: #00c853;
   --error: #ff3b30;
 
@@ -125,3 +126,280 @@ input::placeholder {
 .h-full { height: 100%; }
 .flex-1 { flex: 1; }
 .truncate { overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+/* ---------------------------------------------------------------------------
+   Dialog (replaces window.confirm / window.prompt)
+   --------------------------------------------------------------------------- */
+
+.dialog-overlay {
+  position: fixed;
+  inset: 0;
+  z-index: 2000;
+  display: grid;
+  place-items: center;
+  padding: 24px;
+  background: rgba(0, 0, 0, 0.62);
+  backdrop-filter: blur(3px);
+  -webkit-backdrop-filter: blur(3px);
+  animation: dialog-overlay-in 140ms ease-out;
+}
+
+.dialog-card {
+  width: min(420px, 100%);
+  background: var(--bg-secondary);
+  border: 1px solid var(--border);
+  border-radius: var(--radius-lg);
+  box-shadow: var(--shadow-lg);
+  padding: 22px 22px 18px;
+  animation: dialog-card-in 160ms cubic-bezier(0.16, 1, 0.3, 1);
+}
+
+.dialog-header {
+  display: flex;
+  align-items: center;
+  gap: 12px;
+}
+
+.dialog-icon {
+  width: 34px;
+  height: 34px;
+  flex-shrink: 0;
+  display: grid;
+  place-items: center;
+  border-radius: 50%;
+  background: var(--accent-soft);
+  color: var(--accent);
+}
+
+.dialog-icon.is-danger {
+  background: rgba(255, 59, 48, 0.14);
+  color: var(--error);
+}
+
+.dialog-title {
+  font-size: 15px;
+  font-weight: 700;
+  color: var(--fg-primary);
+  letter-spacing: -0.2px;
+}
+
+.dialog-message {
+  margin-top: 14px;
+  font-size: 13.5px;
+  line-height: 1.6;
+  color: var(--fg-secondary);
+  overflow-wrap: anywhere;
+}
+
+.dialog-field {
+  margin-top: 16px;
+  display: flex;
+  flex-direction: column;
+  gap: 6px;
+}
+
+.dialog-label {
+  font-size: 11px;
+  font-weight: 600;
+  text-transform: uppercase;
+  letter-spacing: 0.06em;
+  color: var(--fg-muted);
+}
+
+.dialog-input {
+  width: 100%;
+  padding: 10px 12px;
+  background: var(--bg-tertiary);
+  border: 1px solid var(--border);
+  border-radius: var(--radius-sm);
+  color: var(--fg-primary);
+  font-size: 13.5px;
+  outline: none;
+  transition: border-color var(--transition), box-shadow var(--transition);
+}
+
+.dialog-input::placeholder {
+  color: var(--fg-muted);
+}
+
+.dialog-input:focus {
+  border-color: var(--accent);
+  box-shadow: 0 0 0 3px var(--accent-soft);
+}
+
+.dialog-actions {
+  display: flex;
+  justify-content: flex-end;
+  gap: 10px;
+  margin-top: 22px;
+}
+
+.dialog-btn {
+  padding: 9px 16px;
+  border-radius: var(--radius-sm);
+  font-size: 13px;
+  font-weight: 600;
+  transition: background var(--transition), border-color var(--transition), opacity var(--transition);
+}
+
+.dialog-btn:focus-visible {
+  outline: 2px solid var(--accent);
+  outline-offset: 2px;
+}
+
+.dialog-btn-ghost {
+  border: 1px solid var(--border);
+  color: var(--fg-secondary);
+}
+
+.dialog-btn-ghost:hover {
+  background: var(--bg-hover);
+  border-color: var(--border-hover);
+  color: var(--fg-primary);
+}
+
+.dialog-btn-primary {
+  background: var(--accent);
+  color: #fff;
+}
+
+.dialog-btn-primary:hover:not(:disabled) {
+  background: var(--accent-hover);
+}
+
+.dialog-btn-danger {
+  background: var(--error);
+  color: #fff;
+}
+
+.dialog-btn-danger:hover:not(:disabled) {
+  filter: brightness(1.1);
+}
+
+.dialog-btn:disabled {
+  opacity: 0.45;
+  cursor: not-allowed;
+}
+
+@keyframes dialog-overlay-in {
+  from { opacity: 0; }
+  to { opacity: 1; }
+}
+
+@keyframes dialog-card-in {
+  from { opacity: 0; transform: translateY(10px) scale(0.98); }
+  to { opacity: 1; transform: translateY(0) scale(1); }
+}
+
+@media (prefers-reduced-motion: reduce) {
+  .dialog-overlay,
+  .dialog-card {
+    animation: none;
+  }
+}
+
+/* ---------------------------------------------------------------------------
+   Responsive page shell
+   --------------------------------------------------------------------------- */
+
+.page-body {
+  padding: 28px 32px;
+  overflow-y: auto;
+  flex: 1;
+  min-width: 0;
+}
+
+@media (max-width: 900px) {
+  .page-body {
+    padding: 16px 14px 28px;
+  }
+}
+
+/* ---------------------------------------------------------------------------
+   Volume control (0–200%)
+
+   The global `input` rule above gives every input padding, a border and a
+   solid background. On a range input that leaves a visible bar at 0% and
+   empty space at 200%: the native accent-color fill stops at the thumb
+   centre and the browser reserves half a thumb at each end. Paint the track
+   ourselves so the endpoints are exact.
+   --------------------------------------------------------------------------- */
+
+.volume-slider {
+  -webkit-appearance: none;
+  appearance: none;
+  width: 104px;
+  height: 6px;
+  padding: 0;
+  border: none;
+  border-radius: 999px;
+  outline: none;
+  cursor: pointer;
+  background: linear-gradient(
+    to right,
+    var(--accent) 0%,
+    var(--accent) var(--volume-fill, 50%),
+    var(--border) var(--volume-fill, 50%),
+    var(--border) 100%
+  );
+}
+
+.volume-slider:focus {
+  box-shadow: none;
+}
+
+.volume-slider:focus-visible {
+  box-shadow: 0 0 0 3px var(--accent-soft);
+}
+
+.volume-slider::-webkit-slider-thumb {
+  -webkit-appearance: none;
+  appearance: none;
+  width: 14px;
+  height: 14px;
+  border-radius: 50%;
+  background: var(--volume-thumb, var(--accent));
+  border: 2px solid var(--bg-secondary);
+  cursor: grab;
+}
+
+.volume-slider::-moz-range-thumb {
+  width: 14px;
+  height: 14px;
+  border-radius: 50%;
+  background: var(--volume-thumb, var(--accent));
+  border: 2px solid var(--bg-secondary);
+  cursor: grab;
+}
+
+/* Editable value: typing "1" is the reliable way to set exactly 1%. */
+.volume-number {
+  width: 42px;
+  padding: 4px 4px;
+  font-size: 11px;
+  text-align: right;
+  background: transparent;
+  border: 1px solid transparent;
+  border-radius: var(--radius-sm);
+  color: var(--fg-secondary);
+  -moz-appearance: textfield;
+}
+
+.volume-number::-webkit-outer-spin-button,
+.volume-number::-webkit-inner-spin-button {
+  -webkit-appearance: none;
+  margin: 0;
+}
+
+.volume-number:hover,
+.volume-number:focus {
+  background: var(--bg-secondary);
+  border-color: var(--border);
+  color: var(--fg-primary);
+}
+
+/* Keep the desktop player from overflowing between 901px and 1200px. */
+@media (max-width: 1200px) {
+  .voice-status-label {
+    display: none;
+  }
+}

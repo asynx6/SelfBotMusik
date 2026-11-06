@@ -128,9 +128,6 @@ class LavalinkEngine extends BaseEngine {
         if (!trackRow) {
             throw new Error("trackRow is required");
         }
-        if (trackRow.file_path && !process.env.STREAM_LOCAL_VIA_LAVALINK) {
-            throw new Error("Local tracks not supported by LavalinkEngine; use LocalEngine");
-        }
         if (trackRow.source_type && trackRow.source_type !== "lavalink" && !trackRow.file_path) {
             throw new Error(`Unsupported source_type: ${trackRow.source_type}; LavalinkEngine requires source_type === 'lavalink'`);
         }
@@ -145,19 +142,46 @@ class LavalinkEngine extends BaseEngine {
 
         let track;
         if (trackRow.file_path) {
-            // Local file: stream via internal HTTP endpoint for Lavalink to play
+            // Local file: ask Lavalink to LOAD the internal stream URL so it
+            // plays the real file from disk (DAVE-safe path). This only works
+            // when Lavalink can reach STREAM_BASE_URL — true on the VPS, where
+            // bot and Lavalink share the host.
             const baseUrl = process.env.STREAM_BASE_URL || "http://127.0.0.1:3434";
-            track = {
-                info: {
-                    title: trackRow.title || "Unknown",
-                    author: trackRow.artist || trackRow.author || "Unknown",
-                    length: trackRow.duration_ms || trackRow.duration || 0,
-                    identifier: trackRow.identifier || String(trackRow.id),
-                    isSeekable: true,
-                    isStream: true,
-                    uri: `${baseUrl}/api/stream/${trackRow.id}`,
+            const streamUrl = `${baseUrl}/api/stream/${trackRow.id}`;
+            let loaded = null;
+            try {
+                const res = await this.poru.resolve({ query: streamUrl, requester: this.requester });
+                if (res && res.loadType === "track" && Array.isArray(res.tracks) && res.tracks.length) {
+                    loaded = res.tracks[0];
                 }
-            };
+            } catch (e) {
+                console.warn(`[lavalink] stream resolve failed (${streamUrl}): ${e.message}`);
+            }
+
+            if (loaded) {
+                track = loaded;
+            } else {
+                // Lavalink cannot reach the stream (remote node + local bot).
+                // Keep the title metadata only: Poru then re-resolves it by
+                // "author - title", so the bot still plays *something* instead
+                // of silently transmitting nothing.
+                console.warn(
+                    `[lavalink] ⚠️  Lavalink tidak bisa mengambil stream lokal (${streamUrl}). `
+                    + `Memutar versi pencarian judul sebagai gantinya. Set STREAM_BASE_URL ke URL yang `
+                    + `dapat dijangkau node Lavalink (mis. http://127.0.0.1:3434 di VPS).`
+                );
+                track = {
+                    info: {
+                        title: trackRow.title || "Unknown",
+                        author: trackRow.artist || trackRow.author || "Unknown",
+                        length: trackRow.duration_ms || trackRow.duration || 0,
+                        identifier: trackRow.identifier || String(trackRow.id),
+                        uri: trackRow.uri || "",
+                        isSeekable: true,
+                        isStream: false,
+                    }
+                };
+            }
         } else if (trackRow.encoded || trackRow.track) {
             track = {
                 track: trackRow.encoded || trackRow.track,
@@ -183,6 +207,33 @@ class LavalinkEngine extends BaseEngine {
                     identifier: trackRow.identifier || ""
                 }
             };
+        }
+
+        // Poru's Player.play() only calls updatePlayer() when the queued object
+        // carries a base64 `track`. A row from the SQLite library is metadata
+        // only; without resolving it here, play() resolves successfully while
+        // Lavalink is never asked to play anything — the "pesan muncul tapi
+        // tidak nyanyi" symptom.
+        if (!track?.track && typeof this.poru?.resolve === "function") {
+            const query = trackRow.uri
+                || [trackRow.artist || trackRow.author, trackRow.title].filter(Boolean).join(" - ");
+            if (query) {
+                try {
+                    const res = await this.poru.resolve({ query, requester: this.requester });
+                    if (res && typeof res === "object" && Array.isArray(res.tracks) && res.tracks.length) {
+                        track = res.tracks[0];
+                    }
+                } catch (e) {
+                    console.warn(`[lavalink] resolve gagal untuk "${query}": ${e.message}`);
+                }
+            }
+        }
+
+        if (!track?.track) {
+            throw new Error(
+                `Lavalink tidak bisa memutar "${trackRow.title || "Unknown"}": `
+                + "tidak ada encoded track (resolve gagal atau node tidak mengembalikan lagu)"
+            );
         }
 
         if (player.queue && typeof player.queue.add === "function") {

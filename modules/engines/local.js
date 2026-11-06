@@ -8,6 +8,7 @@ const {
     createAudioPlayer,
     createAudioResource,
     AudioPlayerStatus,
+    VoiceConnectionStatus,
     StreamType
 } = require("@discordjs/voice");
 const { BaseEngine } = require("./base");
@@ -23,7 +24,8 @@ class LocalEngine extends BaseEngine {
         voiceConnection,
         audioPlayer,
         spawn: spawnFn,
-        createAudioResource: createAudioResourceFn
+        createAudioResource: createAudioResourceFn,
+        voiceReadyTimeoutMs = 15000
     } = {}) {
         super();
         this.name = "local";
@@ -42,6 +44,9 @@ class LocalEngine extends BaseEngine {
         this.volume = 100;
         this._stopping = false;
         this._destroyed = false;
+        // How long to wait for the voice connection to become ready before
+        // giving up. Configurable so tests do not have to wait the full time.
+        this.voiceReadyTimeoutMs = voiceReadyTimeoutMs;
 
         this.audioPlayer = audioPlayer || createAudioPlayer();
         this.voiceConnection = voiceConnection || null;
@@ -76,11 +81,14 @@ class LocalEngine extends BaseEngine {
     _ensureVoiceConnection() {
         if (this.voiceConnection) return this.voiceConnection;
 
+        // The bridge's adapter creator delivers the gateway packets in the
+        // order @discordjs/voice needs, so its UDP socket actually starts.
+        // The stock guild.voiceAdapterCreator can leave the connection stuck
+        // in "signalling" — silent playback, no error.
         let adapterCreator = this.adapterCreator;
         if (!adapterCreator && this.client) {
-            const guild = this.client.guilds?.cache?.get(this.guildId)
-                || (typeof this.client.guilds?.resolve === "function" ? this.client.guilds.resolve(this.guildId) : null);
-            adapterCreator = guild?.voiceAdapterCreator;
+            const { adapterCreatorFor } = require("../voice-bridge");
+            adapterCreator = adapterCreatorFor(this.client, this.guildId);
         }
 
         if (this.channelId && this.guildId && adapterCreator) {
@@ -91,8 +99,51 @@ class LocalEngine extends BaseEngine {
                 selfDeaf: true,
                 selfMute: false
             });
+            this._watchVoiceConnection();
         }
         return this.voiceConnection;
+    }
+
+    _watchVoiceConnection() {
+        const conn = this.voiceConnection;
+        if (!conn || typeof conn.on !== "function") return;
+        conn.on("stateChange", (oldState, newState) => {
+            this.lastVoiceStatus = newState.status;
+            console.log(`[voice] ${oldState.status} -> ${newState.status}`);
+        });
+        conn.on("error", (err) => {
+            this.lastVoiceError = err?.message || String(err);
+            console.error(`[voice] error: ${this.lastVoiceError}`);
+        });
+    }
+
+    /**
+     * Block until the voice connection is ready to carry audio.
+     *
+     * Without this the audio player happily starts against a connection that
+     * never reached "ready", so ffmpeg decodes into the void: the bot shows a
+     * track playing but produces no sound at all.
+     */
+    async _waitForReady(timeoutMs = this.voiceReadyTimeoutMs) {
+        const conn = this.voiceConnection;
+        if (!conn) return false;
+        // Not a real @discordjs/voice connection (an injected test double or a
+        // custom adapter): there is no readiness state machine to wait for.
+        if (!conn.state || typeof conn.state.status !== "string") return true;
+        const deadline = Date.now() + timeoutMs;
+        while (Date.now() < deadline) {
+            const status = conn.state?.status;
+            if (status === VoiceConnectionStatus.Ready) return true;
+            if (status === VoiceConnectionStatus.Destroyed) {
+                throw new Error(this.lastVoiceError || "Koneksi voice dihancurkan");
+            }
+            await new Promise((r) => setTimeout(r, 150));
+        }
+        throw new Error(
+            `Koneksi voice belum siap setelah ${Math.round(timeoutMs / 1000)} detik `
+            + `(status: ${conn.state?.status || "tidak diketahui"})`
+            + `${this.lastVoiceError ? ` — ${this.lastVoiceError}` : ""}`
+        );
     }
 
     _cleanupFfmpeg() {
@@ -154,25 +205,40 @@ class LocalEngine extends BaseEngine {
             resource.playbackDuration = startMs;
         }
 
-        this._ensureVoiceConnection();
-        if (!this.voiceConnection) {
-            throw new Error("Failed to establish voice connection (joinVoiceChannel returned null)");
-        }
-        if (typeof this.voiceConnection.subscribe === "function" && this.audioPlayer) {
-            this.voiceConnection.subscribe(this.audioPlayer);
-        }
+        // Everything below can fail (no permission, voice never ready, …).
+        // ffmpeg is already running by then, so a throw without cleanup leaves
+        // an orphan process decoding into a closed pipe — the stuck ffmpeg
+        // banner the user sees in the terminal.
+        try {
+            this._ensureVoiceConnection();
+            if (!this.voiceConnection) {
+                throw new Error("Failed to establish voice connection (joinVoiceChannel returned null)");
+            }
 
-        if (this.audioPlayer && typeof this.audioPlayer.play === "function") {
-            this.audioPlayer.play(resource);
+            // Do not hand audio to a connection that is not ready yet: the
+            // player would report "playing" while nothing is ever transmitted.
+            await this._waitForReady();
 
-            // Watchdog: if Playing never arrives (e.g. no subscriber, dead
-            // connection), the track would hang forever — fail loudly instead.
-            clearTimeout(this._playStartTimer);
-            this._playStartTimer = setTimeout(() => {
-                if (this._destroyed || this.audioPlayer?.state?.status === AudioPlayerStatus.Playing) return;
-                this._cleanupFfmpeg();
-                this.emit("error", new Error("Playback did not start within 5s"));
-            }, 5000);
+            if (typeof this.voiceConnection.subscribe === "function" && this.audioPlayer) {
+                this.voiceConnection.subscribe(this.audioPlayer);
+            }
+
+            if (this.audioPlayer && typeof this.audioPlayer.play === "function") {
+                this.audioPlayer.play(resource);
+
+                // Watchdog: if Playing never arrives (e.g. no subscriber, dead
+                // connection), the track would hang forever — fail loudly instead.
+                clearTimeout(this._playStartTimer);
+                this._playStartTimer = setTimeout(() => {
+                    if (this._destroyed || this.audioPlayer?.state?.status === AudioPlayerStatus.Playing) return;
+                    this._cleanupFfmpeg();
+                    this.emit("error", new Error("Playback did not start within 5s"));
+                }, 5000);
+            }
+        } catch (err) {
+            this._cleanupFfmpeg();
+            this.currentResource = null;
+            throw err;
         }
     }
 

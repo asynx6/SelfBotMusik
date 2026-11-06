@@ -484,6 +484,47 @@ test("8. quota exceeded fails task immediately without spawning yt-dlp", async (
     }
 });
 
+test("8b. low free disk space fails the task before yt-dlp writes anything", async () => {
+    const previousReserve = process.env.DISK_RESERVE_MB;
+    process.env.DISK_RESERVE_MB = "128";
+    const env = setupTestEnvironment();
+    try {
+        env.fakeDb.setSetting("library_quota_gb", "5");
+        // 40 MB free is below the 128 MB reserve.
+        env.fakeLibrary.freeDiskBytes = async () => 40 * 1024 * 1024;
+
+        const track = env.addTrack({ title: "Tight Disk Song" });
+        let spawnCalls = 0;
+
+        const manager = createDownloadManager({
+            spawn: () => {
+                spawnCalls++;
+                return createFakeChild();
+            },
+            library: env.fakeLibrary,
+            db: env.fakeDb,
+            dataDir: env.tmpDir,
+        });
+
+        const rows = manager.enqueue(track.id);
+        const dlId = rows[0].id;
+
+        await waitForCondition(() => {
+            const row = manager.getById(dlId);
+            return row && row.status === "failed";
+        });
+
+        assert.equal(spawnCalls, 0, "yt-dlp must not be started");
+        const failedRow = manager.getById(dlId);
+        assert.equal(failedRow.status, "failed");
+        assert.ok(/disk/i.test(failedRow.error), `expected a disk message, got: ${failedRow.error}`);
+    } finally {
+        env.cleanup();
+        if (previousReserve === undefined) delete process.env.DISK_RESERVE_MB;
+        else process.env.DISK_RESERVE_MB = previousReserve;
+    }
+});
+
 test("9. cancel queued task before it starts running cancels and prevents spawn", async () => {
     const env = setupTestEnvironment();
     try {

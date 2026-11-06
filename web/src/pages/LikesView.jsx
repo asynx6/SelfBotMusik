@@ -1,6 +1,8 @@
 import React, { useState, useEffect } from "react";
 import { Play, Heart, Trash2 } from "lucide-react";
 import { api } from "../services/api";
+import TrackArt from "../components/TrackArt";
+import DownloadButton from "../components/DownloadButton";
 
 function formatDuration(ms) {
   if (!ms) return "0:00";
@@ -41,7 +43,7 @@ export default function LikesView({ onNotification }) {
   const handlePlayAll = async () => {
     if (!tracks.length) return;
     try {
-      await api.addToQueue(tracks.map((t) => t.id));
+      await api.playNow(tracks.map((t) => t.id));
       onNotification?.("success", `Memutar ${tracks.length} lagu disukai`);
     } catch (e) {
       onNotification?.("error", e.message);
@@ -49,7 +51,7 @@ export default function LikesView({ onNotification }) {
   };
 
   return (
-    <div style={{ padding: "28px 32px", overflowY: "auto", flex: 1 }}>
+    <div className="page-body">
       <div style={{ display: "flex", alignItems: "center", justifyContent: "space-between", marginBottom: 24 }}>
         <div style={{ display: "flex", alignItems: "center", gap: 16 }}>
           <div style={{
@@ -107,10 +109,9 @@ export default function LikesView({ onNotification }) {
               <span style={{ width: 20, fontSize: 12, color: "var(--fg-muted)", textAlign: "center" }}>
                 {idx + 1}
               </span>
-              <img
-                src={t.cover_url || (t.cover_path ? `/api/library/tracks/${t.id}/cover` : "https://placehold.co/40x40?text=Audio")}
+              <TrackArt
+                src={t.thumbnail || t.cover_url || (t.cover_path ? `/api/library/tracks/${t.id}/cover` : "")}
                 alt={t.title}
-                style={{ width: 40, height: 40, borderRadius: 4, objectFit: "cover" }}
               />
               <div style={{ minWidth: 0, flex: 1 }}>
                 <div style={{ fontWeight: 600, whiteSpace: "nowrap", overflow: "hidden", textOverflow: "ellipsis" }}>
@@ -123,8 +124,20 @@ export default function LikesView({ onNotification }) {
             </div>
 
             <div style={{ display: "flex", alignItems: "center", gap: 8 }}>
+              <DownloadButton
+                trackId={t.id}
+                downloaded={!!t.file_path}
+                onNotification={onNotification}
+                compact
+              />
               <button
-                onClick={() => api.addToQueue([t.id])}
+                onClick={async () => {
+                  try {
+                    await api.playNow([t.id]);
+                  } catch (e) {
+                    onNotification?.("error", e.message);
+                  }
+                }}
                 title="Putar Sekarang"
                 style={{ padding: 6, color: "var(--fg-secondary)" }}
               >

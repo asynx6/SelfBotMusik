@@ -35,16 +35,11 @@ test("BaseEngine contract: implements all interface methods and extends EventEmi
     assert.equal(emittedEnd, true);
 });
 
-test("LavalinkEngine: rejects local tracks and non-lavalink sources", async () => {
+test("LavalinkEngine: rejects non-lavalink sources, streams local files", async () => {
     const mockPoru = new EventEmitter();
     mockPoru.players = new Map();
     const engine = new LavalinkEngine({ poru: mockPoru, guildId: "g1" });
     assert.equal(engine.name, "lavalink");
-
-    await assert.rejects(
-        () => engine.play({ file_path: "track.mp3", source_type: "local" }),
-        /Local tracks not supported/
-    );
 
     await assert.rejects(
         () => engine.play({ source_type: "spotify", uri: "https://example.com" }),
@@ -53,6 +48,12 @@ test("LavalinkEngine: rejects local tracks and non-lavalink sources", async () =
 
     await assert.rejects(
         () => engine.play({ source_type: "lavalink", uri: "https://example.com" }),
+        /No Poru player found for guild g1/
+    );
+
+    // Local files stream through the internal HTTP endpoint (DAVE-safe path)
+    await assert.rejects(
+        () => engine.play({ file_path: "track.mp3", source_type: "local", id: 7 }),
         /No Poru player found for guild g1/
     );
 });
@@ -128,6 +129,11 @@ test("LavalinkEngine: queueEnd on Poru emits 'end' and deduplicates with trackEn
     mockPlayer.queue.add = function (t) { this.push(t); };
     mockPlayer.play = async () => {};
 
+    // Real Poru resolves metadata-only rows into base64 tracks before queueing.
+    mockPoru.resolve = async () => ({
+        loadType: "track",
+        tracks: [{ track: "ENCODED", info: { title: "Solo Track" } }],
+    });
     mockPoru.players.set("g1", mockPlayer);
 
     const engine = new LavalinkEngine({ poru: mockPoru, guildId: "g1" });
@@ -202,6 +208,10 @@ test("LavalinkEngine: destroy cleans queue, stops player, and removes listeners"
     mockPlayer.stop = async () => { stopCalled = true; };
     mockPlayer.destroy = async () => { destroyCalled = true; };
 
+    mockPoru.resolve = async () => ({
+        loadType: "track",
+        tracks: [{ track: "ENCODED", info: { title: "Track" } }],
+    });
     mockPoru.players.set("g1", mockPlayer);
 
     const engine = new LavalinkEngine({ poru: mockPoru, guildId: "g1" });
@@ -453,6 +463,64 @@ test("LocalEngine: audioPlayer and ffmpeg events emit 'end' and 'error'", async 
     mockFfmpeg.emit("error", spawnErr);
     assert.equal(errorEvents.length, 2);
     assert.equal(errorEvents[1].message, "FFmpeg spawn error");
+
+    fs.rmSync(tmpDir, { recursive: true, force: true });
+});
+
+// --- Voice readiness + ffmpeg cleanup ---------------------------------------
+// A track that cannot reach a ready voice connection must not leave ffmpeg
+// running: the orphaned process decodes into a closed pipe and shows up as a
+// stuck ffmpeg banner in the terminal while the bot stays silent.
+
+test("LocalEngine: a voice connection that never becomes ready fails loudly and kills ffmpeg", async () => {
+    const fs = require("node:fs");
+    const path = require("node:path");
+    const os = require("node:os");
+    const { PassThrough } = require("node:stream");
+    const { EventEmitter } = require("node:events");
+
+    const tmpDir = fs.mkdtempSync(path.join(os.tmpdir(), "sbm-engine-"));
+    const libDir = path.join(tmpDir, "library");
+    fs.mkdirSync(libDir, { recursive: true });
+    fs.writeFileSync(path.join(libDir, "song.mp3"), "audio");
+
+    let killed = false;
+    const mockFfmpeg = new EventEmitter();
+    mockFfmpeg.stdout = new PassThrough();
+    mockFfmpeg.kill = () => { killed = true; };
+
+    // A real-looking connection that stays in "signalling" forever.
+    const stuckConnection = {
+        state: { status: "signalling" },
+        subscribe: () => {},
+        destroy: () => {},
+        on: () => {},
+    };
+
+    const mockAudioPlayer = new EventEmitter();
+    mockAudioPlayer.play = () => {};
+    mockAudioPlayer.pause = () => {};
+    mockAudioPlayer.unpause = () => {};
+    mockAudioPlayer.stop = () => {};
+
+    const engine = new LocalEngine({
+        guildId: "g1",
+        channelId: "c1",
+        dataDir: tmpDir,
+        voiceConnection: stuckConnection,
+        audioPlayer: mockAudioPlayer,
+        spawn: () => mockFfmpeg,
+        voiceReadyTimeoutMs: 200,
+    });
+
+    await assert.rejects(
+        () => engine.play({ file_path: "song.mp3" }, { volume: 100 }),
+        /Koneksi voice belum siap/,
+        "play() must report that the voice connection never became ready"
+    );
+
+    assert.equal(killed, true, "ffmpeg must be killed when the play attempt fails");
+    assert.equal(engine.ffmpegProcess, null, "the ffmpeg reference must be cleared");
 
     fs.rmSync(tmpDir, { recursive: true, force: true });
 });

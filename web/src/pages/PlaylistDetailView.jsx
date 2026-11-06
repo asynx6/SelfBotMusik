@@ -1,6 +1,8 @@
 import React, { useState, useEffect } from "react";
 import { Play, Plus, Trash2, Heart, Music2, Share2, Layers } from "lucide-react";
 import { api } from "../services/api";
+import TrackArt from "../components/TrackArt";
+import DownloadButton from "../components/DownloadButton";
 
 function formatDuration(ms) {
   if (!ms) return "0:00";
@@ -33,7 +35,7 @@ export default function PlaylistDetailView({ playlistId, onNotification, onDelet
     if (!data?.tracks?.length) return;
     try {
       const trackIds = data.tracks.map((t) => t.id);
-      await api.addToQueue(trackIds);
+      await api.playNow(trackIds);
       onNotification?.("success", `Memutar ${trackIds.length} lagu dari ${data.playlist.name}`);
     } catch (err) {
       onNotification?.("error", err.message);
@@ -55,7 +57,7 @@ export default function PlaylistDetailView({ playlistId, onNotification, onDelet
   const { playlist, tracks = [] } = data;
 
   return (
-    <div style={{ padding: "28px 32px", overflowY: "auto", flex: 1 }}>
+    <div className="page-body">
       {/* Header */}
       <div style={{ display: "flex", alignItems: "flex-end", gap: 24, marginBottom: 32 }}>
         <div style={{
@@ -143,10 +145,9 @@ export default function PlaylistDetailView({ playlistId, onNotification, onDelet
               <span style={{ width: 24, fontSize: 12, color: "var(--fg-muted)", textAlign: "center" }}>
                 {index + 1}
               </span>
-              <img
-                src={t.cover_url || (t.cover_path ? `/api/library/tracks/${t.id}/cover` : "https://placehold.co/40x40?text=Audio")}
+              <TrackArt
+                src={t.thumbnail || t.cover_url || (t.cover_path ? `/api/library/tracks/${t.id}/cover` : "")}
                 alt={t.title}
-                style={{ width: 40, height: 40, borderRadius: 4, objectFit: "cover" }}
               />
               <div style={{ minWidth: 0, flex: 1 }}>
                 <div style={{ fontWeight: 600, whiteSpace: "nowrap", overflow: "hidden", textOverflow: "ellipsis" }}>
@@ -159,8 +160,20 @@ export default function PlaylistDetailView({ playlistId, onNotification, onDelet
             </div>
 
             <div style={{ display: "flex", alignItems: "center", gap: 6 }}>
+              <DownloadButton
+                trackId={t.id}
+                downloaded={!!t.file_path}
+                onNotification={onNotification}
+                compact
+              />
               <button
-                onClick={() => api.addToQueue([t.id])}
+                onClick={async () => {
+                  try {
+                    await api.playNow([t.id]);
+                  } catch (e) {
+                    onNotification?.("error", e.message);
+                  }
+                }}
                 title="Putar Sekarang"
                 style={{ padding: 6, color: "var(--fg-secondary)" }}
               >

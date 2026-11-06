@@ -10,14 +10,20 @@ npm-debug.log*
 yarn-error.log
 pnpm-debug.log*
 
+# --- Bundled binaries (platform-specific, fetched by `npm run setup:bin`) ---
+bin/*
+!bin/README.md
+
 # --- Build / cache / coverage ---
 .cache/
 dist/
 build/
 coverage/
 .superpowers/
+test_tmp/
 
 # --- Editor / OS ---
+.workbuddy-ai/
 .idea/
 .vscode/
 *.swp

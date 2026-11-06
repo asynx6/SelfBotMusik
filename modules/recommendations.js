@@ -93,7 +93,9 @@ async function getRecommendations(currentTrack, options = {}) {
     const candidates = [];
 
     // 1. Get library tracks as base candidates
-    const libraryTracks = await getLibraryCandidates(100);
+    //    `customDb` must be forwarded, otherwise callers that pass a test or
+    //    alternate database silently read the default one instead.
+    const libraryTracks = await getLibraryCandidates(100, customDb);
     for (const track of libraryTracks) {
         // Skip the currently playing track
         if (currentTrack && track.id === currentTrack.id) continue;
@@ -166,21 +168,19 @@ async function getAutoplayRecommendations(currentTrack, options = {}) {
     return shuffled.slice(0, count);
 }
 
-// Called when a track ends to queue next recommendation
-async function onTrackEnd(currentTrack, controller, options = {}) {
+// Returns one recommendation WITHOUT mutating the queue. The controller owns
+// queue insertion (PlayerController.next). Both sides doing it duplicated every
+// autoplay track and left currentIndex pointing past the inserted item.
+async function onTrackEnd(currentTrack, _controller, options = {}) {
     if (!currentTrack) return null;
 
     const recommendations = await getAutoplayRecommendations(currentTrack, {
         count: 1,
         includeLocal: true,
+        customDb: options.customDb || null,
     });
 
-    if (recommendations.length === 0) return null;
-
-    const nextTrack = recommendations[0];
-    await controller.playNext([nextTrack], "Autoplay");
-
-    return nextTrack;
+    return recommendations.length ? recommendations[0] : null;
 }
 
 module.exports = {

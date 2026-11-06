@@ -9,6 +9,7 @@ const childProcess = require("node:child_process");
 
 const defaultLibrary = require("./library");
 const defaultDatabase = require("./database");
+const defaultBinaries = require("./binaries");
 
 const PROGRESS_REGEX = /\[download\]\s+(\d+(?:\.\d+)?)%/;
 
@@ -17,6 +18,7 @@ function createDownloadManager({
     library = defaultLibrary,
     db = defaultDatabase,
     dataDir = defaultDatabase.DATA_DIR,
+    binaries = defaultBinaries,
 } = {}) {
     const emitter = new EventEmitter();
 
@@ -251,6 +253,33 @@ function createDownloadManager({
                     diskUsage = { bytes: 0 };
                 }
 
+                // Real free-space check. The library quota bounds the tracks
+                // only; on a small panel the volume itself can run out because
+                // of temp files or other data. Refuse before yt-dlp writes.
+                const reserveMb = Number(process.env.DISK_RESERVE_MB ?? 128);
+                if (reserveMb > 0 && typeof library.freeDiskBytes === "function") {
+                    let freeBytes = null;
+                    try {
+                        freeBytes = await library.freeDiskBytes();
+                    } catch {
+                        freeBytes = null;
+                    }
+                    if (freeBytes !== null && freeBytes < reserveMb * 1024 * 1024) {
+                        const freeMb = (freeBytes / 1048576).toFixed(0);
+                        sqliteDb.prepare(`
+                            UPDATE downloads
+                            SET status = 'failed', error = ?, finished_at = ?
+                            WHERE id = ?
+                        `).run(
+                            `Disk hampir penuh: sisa ${freeMb} MB, reserve ${reserveMb} MB`,
+                            Date.now(),
+                            queuedRow.id
+                        );
+                        emitChange();
+                        continue;
+                    }
+                }
+
                 // Check if canceled or modified while awaiting diskUsage
                 const current = getById(queuedRow.id);
                 if (!current || current.status !== "queued") continue;
@@ -297,7 +326,9 @@ function createDownloadManager({
     function startSpawn(task) {
         if (task.canceled) return;
 
-        const ytdlpPath = getSetting("ytdlp_path", "yt-dlp");
+        const ytdlpPath = binaries.resolveYtdlpPath({
+            dbValue: getSetting("ytdlp_path", "yt-dlp"),
+        });
         const outTemplate = path.join(tmpDir, `${task.id}.%(ext)s`);
         const args = ["-f", "bestaudio/best", "--no-playlist", "--no-part", "-o", outTemplate, task.uri];
 
