@@ -98,6 +98,10 @@ class PlayerController extends EventEmitter {
         this.currentError = null;
 
         this._stopping = false;
+        // Stall watchdog timer: proves audio actually flows (see _startStallWatchdog).
+        this._stallTimer = null;
+        // Guards against two track-switch triggers running at once (see _wireEngineListeners).
+        this._switching = false;
     }
 
     _hasLocalFile(track) {
@@ -212,7 +216,22 @@ class PlayerController extends EventEmitter {
 
         engine.on("end", async ({ reason } = {}) => {
             if (this._stopping || reason === "stop" || this.currentEngine !== engine) return;
-            await this.next();
+
+            // `replaced` / `cleanup` mean Lavalink ended the track because WE
+            // loaded another one (skip, play-now, jump). Advancing the queue
+            // again here double-advances: press skip once and the next track is
+            // skipped too, which cascades through the whole queue.
+            if (reason === "replaced" || reason === "cleanup") return;
+
+            // Re-entrancy guard: trackEnd + watchdog + an explicit skip can all
+            // land in the same tick. Only the first switch wins.
+            if (this._switching) return;
+            this._switching = true;
+            try {
+                await this.next();
+            } finally {
+                this._switching = false;
+            }
         });
 
         engine.on("error", async (err) => {
@@ -220,7 +239,13 @@ class PlayerController extends EventEmitter {
             this.lastError = err;
             this.currentError = err;
             this._logAudit("track_error", err?.message || String(err));
-            await this._skipForward(this.queue[this.currentIndex]);
+            if (this._switching) return;
+            this._switching = true;
+            try {
+                await this._skipForward(this.queue[this.currentIndex]);
+            } finally {
+                this._switching = false;
+            }
         });
 
         engine.on("stuck", async (data) => {
@@ -228,7 +253,13 @@ class PlayerController extends EventEmitter {
             this.lastError = new Error("Track stuck in playback");
             this.currentError = this.lastError;
             this._logAudit("track_stuck", data ? JSON.stringify(data) : "Track stuck");
-            await this._skipForward(this.queue[this.currentIndex]);
+            if (this._switching) return;
+            this._switching = true;
+            try {
+                await this._skipForward(this.queue[this.currentIndex]);
+            } finally {
+                this._switching = false;
+            }
         });
     }
 
@@ -366,6 +397,8 @@ class PlayerController extends EventEmitter {
             // persistent record of the previous failure.
             this.currentError = null;
             this._recordPlay(item.track);
+            // play() resolving is not proof of audio. Only position moving is.
+            this._startStallWatchdog();
             this._emitState();
 
             // Prepare similar candidates while this track plays, so an empty
@@ -464,7 +497,64 @@ class PlayerController extends EventEmitter {
         await this.playCurrent();
     }
 
+    /**
+     * How long a track may sit at position ~0 before we call it stalled.
+     *
+     * `engine.play()` resolving only means the command was accepted — Lavalink
+     * answers "OK" and then transmits nothing when the stream cannot be decoded
+     * (SABR-only format, login-gated client, dead voice UDP). The queue then
+     * reports `playing: true` forever with position 0, which is the "status
+     * bilang nyanyi tapi diem" bug. Position is the only honest signal we have.
+     */
+    static STALL_TIMEOUT_MS = 7000;
+    static STALL_POSITION_MS = 500;
+
+    _startStallWatchdog() {
+        this._clearStallWatchdog();
+        const startedAt = Date.now();
+        const engine = this.currentEngine;
+        this._stallTimer = setInterval(() => {
+            // Ignore stale timers from a previous track / engine.
+            if (this._stopping || this.currentEngine !== engine) {
+                return this._clearStallWatchdog();
+            }
+            let pos = 0;
+            try {
+                pos = engine?.getPositionMs?.() || 0;
+            } catch {
+                pos = 0;
+            }
+            if (pos >= PlayerController.STALL_POSITION_MS) {
+                return this._clearStallWatchdog();
+            }
+            if (Date.now() - startedAt < PlayerController.STALL_TIMEOUT_MS) return;
+
+            this._clearStallWatchdog();
+            const title = this.queue[this.currentIndex]?.track?.title || "Unknown";
+            const err = new Error(
+                `Audio tidak keluar untuk "${title}" (posisi tetap 0 selama `
+                + `${Math.round(PlayerController.STALL_TIMEOUT_MS / 1000)} detik) — `
+                + `node Lavalink menerima track tapi tidak mengirim frame audio`
+            );
+            this.lastError = err;
+            this.currentError = err;
+            this._logAudit("track_stalled", err.message);
+            this._emitState();
+            this._skipForward(this.queue[this.currentIndex]).catch(() => {});
+        }, 1000);
+        // Never hold the process open for a timer.
+        if (typeof this._stallTimer.unref === "function") this._stallTimer.unref();
+    }
+
+    _clearStallWatchdog() {
+        if (this._stallTimer) {
+            clearInterval(this._stallTimer);
+            this._stallTimer = null;
+        }
+    }
+
     async stop() {
+        this._clearStallWatchdog();
         this._stopping = true;
         try {
             if (this.currentEngine && typeof this.currentEngine.stop === "function") {
@@ -491,6 +581,7 @@ class PlayerController extends EventEmitter {
      * connection open.
      */
     async disconnect() {
+        this._clearStallWatchdog();
         const engine = this.currentEngine;
         this.currentEngine = null;
         this.currentEngineType = null;

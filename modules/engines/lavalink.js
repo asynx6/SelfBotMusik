@@ -2,6 +2,29 @@
 
 const { BaseEngine } = require("./base");
 
+/**
+ * `poru.resolve` throws the useless
+ * "Cannot create property 'loadType' on string '<html>…'" when a node sits
+ * behind a reverse proxy that answers with an HTML error page instead of JSON.
+ * Surface the real cause instead.
+ */
+async function safeResolve(poru, payload) {
+    let res;
+    try {
+        res = await poru.resolve(payload);
+    } catch (e) {
+        const msg = String(e?.message || e);
+        if (/Cannot create property 'loadType'|<html|Unexpected token|is not valid JSON/i.test(msg)) {
+            throw new Error("Node Lavalink membalas halaman error (bukan JSON) — node sedang down atau dibatasi");
+        }
+        throw e;
+    }
+    if (!res || typeof res !== "object" || typeof res.loadType !== "string") {
+        throw new Error("Node Lavalink membalas data yang tidak valid — coba lagi atau ganti node");
+    }
+    return res;
+}
+
 class LavalinkEngine extends BaseEngine {
     constructor({ poru, guildId } = {}) {
         super();
@@ -29,6 +52,57 @@ class LavalinkEngine extends BaseEngine {
 
     _getPlayer() {
         return this.poru?.players?.get(this.guildId) || null;
+    }
+
+    /**
+     * True when the Lavalink node runs on this machine, so `127.0.0.1:3434`
+     * actually points at our HTTP stream. Public/remote nodes must never be
+     * given a loopback URL — they would resolve it against their own host.
+     */
+    _isLocalNode() {
+        const opts = this.poru?.nodes?.get?.("main")?.options || {};
+        const host = String(opts.host || "").toLowerCase();
+        if (process.env.STREAM_BASE_URL) return true; // explicit override wins
+        return host === "127.0.0.1" || host === "localhost" || host === "::1";
+    }
+
+    /**
+     * Resolve a library row through the node by its original URI (or by
+     * "artist - title" when the row has none).
+     *
+     * This is what makes a track from History / Library playable at all: the
+     * SQLite row stores metadata, not an encoded Lavalink track, so the node
+     * has to look it up again.
+     */
+    async _resolveRemote(trackRow) {
+        const uri = trackRow.uri || trackRow.identifier || "";
+        const titleQuery = [trackRow.artist || trackRow.author, trackRow.title]
+            .filter(Boolean).join(" - ");
+        // Prefer the stored URL: it points at the exact video the user saved.
+        const candidates = [uri, titleQuery].filter(Boolean);
+        if (!candidates.length) {
+            throw new Error(
+                `Tidak bisa memutar "${trackRow.title || "Unknown"}": `
+                + "baris perpustakaan tidak punya URI maupun judul"
+            );
+        }
+
+        const errors = [];
+        for (const query of candidates) {
+            try {
+                const res = await safeResolve(this.poru, { query, requester: this.requester });
+                if (res.loadType === "track" && res.tracks?.length) return res.tracks[0];
+                if (res.loadType === "search" && res.tracks?.length) return res.tracks[0];
+                if (res.loadType === "playlist" && res.tracks?.length) return res.tracks[0];
+                errors.push(`${query}: loadType=${res.loadType}`);
+            } catch (e) {
+                errors.push(`${query}: ${e.message}`);
+            }
+        }
+        throw new Error(
+            `Tidak bisa memutar "${trackRow.title || "Unknown"}" — node Lavalink gagal me-resolve `
+            + `(${errors.join(" | ")})`
+        );
     }
 
     _setupListeners(player) {
@@ -142,45 +216,27 @@ class LavalinkEngine extends BaseEngine {
 
         let track;
         if (trackRow.file_path) {
-            // Local file: ask Lavalink to LOAD the internal stream URL so it
-            // plays the real file from disk (DAVE-safe path). This only works
-            // when Lavalink can reach STREAM_BASE_URL — true on the VPS, where
-            // bot and Lavalink share the host.
-            const baseUrl = process.env.STREAM_BASE_URL || "http://127.0.0.1:3434";
-            const streamUrl = `${baseUrl}/api/stream/${trackRow.id}`;
-            let loaded = null;
-            try {
-                const res = await this.poru.resolve({ query: streamUrl, requester: this.requester });
-                if (res && res.loadType === "track" && Array.isArray(res.tracks) && res.tracks.length) {
-                    loaded = res.tracks[0];
-                }
-            } catch (e) {
-                console.warn(`[lavalink] stream resolve failed (${streamUrl}): ${e.message}`);
-            }
-
-            if (loaded) {
-                track = loaded;
+            // A downloaded file is only playable through Lavalink when the node
+            // can reach this bot's HTTP stream. A remote/public node resolves
+            // `127.0.0.1` to ITSELF, so the real fix there is to resolve the
+            // original URI (YouTube etc.) instead of the dead loopback URL.
+            // Only stream local files when the node is on this machine.
+            const localNode = this._isLocalNode();
+            if (!localNode) {
+                track = await this._resolveRemote(trackRow);
             } else {
-                // Lavalink cannot reach the stream (remote node + local bot).
-                // Keep the title metadata only: Poru then re-resolves it by
-                // "author - title", so the bot still plays *something* instead
-                // of silently transmitting nothing.
-                console.warn(
-                    `[lavalink] ⚠️  Lavalink tidak bisa mengambil stream lokal (${streamUrl}). `
-                    + `Memutar versi pencarian judul sebagai gantinya. Set STREAM_BASE_URL ke URL yang `
-                    + `dapat dijangkau node Lavalink (mis. http://127.0.0.1:3434 di VPS).`
-                );
-                track = {
-                    info: {
-                        title: trackRow.title || "Unknown",
-                        author: trackRow.artist || trackRow.author || "Unknown",
-                        length: trackRow.duration_ms || trackRow.duration || 0,
-                        identifier: trackRow.identifier || String(trackRow.id),
-                        uri: trackRow.uri || "",
-                        isSeekable: true,
-                        isStream: false,
+                const baseUrl = process.env.STREAM_BASE_URL || "http://127.0.0.1:3434";
+                const streamUrl = `${baseUrl}/api/stream/${trackRow.id}`;
+                let loaded = null;
+                try {
+                    const res = await safeResolve(this.poru, { query: streamUrl, requester: this.requester });
+                    if (res && res.loadType === "track" && Array.isArray(res.tracks) && res.tracks.length) {
+                        loaded = res.tracks[0];
                     }
-                };
+                } catch (e) {
+                    console.warn(`[lavalink] stream resolve failed (${streamUrl}): ${e.message}`);
+                }
+                track = loaded || await this._resolveRemote(trackRow);
             }
         } else if (trackRow.encoded || trackRow.track) {
             track = {
@@ -219,7 +275,7 @@ class LavalinkEngine extends BaseEngine {
                 || [trackRow.artist || trackRow.author, trackRow.title].filter(Boolean).join(" - ");
             if (query) {
                 try {
-                    const res = await this.poru.resolve({ query, requester: this.requester });
+                    const res = await safeResolve(this.poru, { query, requester: this.requester });
                     if (res && typeof res === "object" && Array.isArray(res.tracks) && res.tracks.length) {
                         track = res.tracks[0];
                     }
@@ -236,13 +292,37 @@ class LavalinkEngine extends BaseEngine {
             );
         }
 
-        if (player.queue && typeof player.queue.add === "function") {
-            player.queue.add(track);
-        } else if (Array.isArray(player.queue)) {
-            player.queue.push(track);
-        }
-
-        if (typeof player.play === "function") {
+        // Play the track DIRECTLY through the node instead of pushing it onto
+        // Poru's own player.queue.
+        //
+        // Poru's queue is a second scheduler running beside ours: every
+        // engine.play() appended a track, and Poru replays those leftovers on
+        // every TrackEndEvent regardless of what the controller wants. The tail
+        // of a long session was a burst of tracks firing back to back, then
+        // silence. One owner of the queue is enough — ours.
+        const encoded = track.track;
+        if (player.node?.rest?.updatePlayer) {
+            await player.node.rest.updatePlayer({
+                guildId: this.guildId,
+                data: { track: { encoded } },
+            });
+            player.currentTrack = track;
+            player.position = 0;
+            player.isPlaying = true;
+            // Drop anything Poru queued earlier so it cannot replay later.
+            if (player.queue) {
+                try {
+                    if (typeof player.queue.clear === "function") player.queue.clear();
+                    player.queue.length = 0;
+                } catch { /* best effort */ }
+            }
+        } else if (typeof player.play === "function") {
+            // Fallback for mocks / older Poru without a reachable rest client.
+            if (player.queue && typeof player.queue.add === "function") {
+                player.queue.add(track);
+            } else if (Array.isArray(player.queue)) {
+                player.queue.push(track);
+            }
             await player.play();
         }
 

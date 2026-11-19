@@ -762,3 +762,93 @@ test("21. an online track with no Lavalink node is skipped with an actionable er
         "the error should tell the user Lavalink is the missing piece"
     );
 });
+
+test("22. a track that never advances position is reported as stalled, not playing", async () => {
+    // The real symptom: Lavalink accepts the track (play() resolves) but never
+    // transmits a frame — position stays 0 forever while the dashboard says
+    // "playing". Only position movement counts as proof of audio.
+    class SilentEngine extends MockEngine {
+        constructor() { super("lavalink"); this.position = 0; }
+        getPositionMs() { return 0; }
+    }
+
+    const engine = new SilentEngine();
+    const controller = new PlayerController({
+        isLavalinkReady: () => true,
+        createLavalinkEngine: () => engine,
+    });
+    // Keep the test fast: the default 7s window is for real network stalls.
+    controller.constructor.STALL_TIMEOUT_MS = 300;
+
+    await controller.enqueue([{ id: 94, title: "Silent Song", uri: "https://yt.com/y" }], "user");
+
+    await new Promise((r) => setTimeout(r, 1400));
+
+    assert.ok(controller.lastError, "a stalled track must record an error");
+    assert.match(controller.lastError.message, /Audio tidak keluar/i);
+    assert.match(controller.lastError.message, /posisi tetap 0/i);
+    controller.constructor.STALL_TIMEOUT_MS = 7000;
+    await controller.destroy();
+});
+
+test("23. a track whose position advances is NOT flagged as stalled", async () => {
+    const engine = new MockEngine("lavalink"); // position = 1234
+    const controller = new PlayerController({
+        isLavalinkReady: () => true,
+        createLavalinkEngine: () => engine,
+    });
+    controller.constructor.STALL_TIMEOUT_MS = 300;
+
+    await controller.enqueue([{ id: 95, title: "Healthy Song", uri: "https://yt.com/z" }], "user");
+    await new Promise((r) => setTimeout(r, 1400));
+
+    assert.equal(controller.currentError, null, "healthy playback must not raise a banner");
+    controller.constructor.STALL_TIMEOUT_MS = 7000;
+    await controller.destroy();
+});
+
+test("24. skip does not cascade: a 'replaced' end after an explicit skip must not advance twice", async () => {
+    // Lavalink ends the old track with reason "replaced" when WE load the next
+    // one. Treating that as a natural end advanced the queue a second time, so
+    // one skip skipped two tracks — and a flaky node turned it into a cascade.
+    class CountingEngine extends MockEngine {
+        constructor() { super("lavalink"); this.plays = []; }
+        async play(trackRow, options) { this.plays.push(trackRow.title); return super.play(trackRow, options); }
+    }
+    const engine = new CountingEngine();
+    const controller = new PlayerController({
+        isLavalinkReady: () => true,
+        createLavalinkEngine: () => engine,
+    });
+    const tracks = [1, 2, 3, 4, 5].map((i) => ({ id: i, title: `T${i}` }));
+    await controller.enqueue(tracks, "user");
+    assert.deepEqual(engine.plays, ["T1"]);
+
+    await controller.next();                       // explicit skip -> T2
+    engine.emit("end", { reason: "replaced" });    // Lavalink reports the old track
+    await new Promise((r) => setTimeout(r, 150));
+
+    assert.deepEqual(engine.plays, ["T1", "T2"], "one skip must advance exactly one track");
+    assert.equal(controller.currentIndex, 1);
+    await controller.destroy();
+});
+
+test("25. a burst of track-end events advances at most one track", async () => {
+    class CountingEngine extends MockEngine {
+        constructor() { super("lavalink"); this.plays = []; }
+        async play(trackRow, options) { this.plays.push(trackRow.title); return super.play(trackRow, options); }
+    }
+    const engine = new CountingEngine();
+    const controller = new PlayerController({
+        isLavalinkReady: () => true,
+        createLavalinkEngine: () => engine,
+    });
+    await controller.enqueue([1, 2, 3, 4, 5, 6].map((i) => ({ id: i, title: `T${i}` })), "user");
+
+    // trackEnd + watchdog + a skip can all land in the same tick.
+    for (let i = 0; i < 5; i++) engine.emit("end", { reason: "finished" });
+    await new Promise((r) => setTimeout(r, 250));
+
+    assert.equal(engine.plays.length, 2, "the queue must not be walked by a duplicate-event burst");
+    await controller.destroy();
+});

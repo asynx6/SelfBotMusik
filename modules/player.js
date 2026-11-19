@@ -32,6 +32,34 @@ async function setLoop(poru, Runtime, mode) {
 }
 
 // --- Search ---
+
+/**
+ * Wrap `poru.resolve` so a broken upstream node cannot poison the caller.
+ *
+ * Public/free Lavalink nodes sit behind reverse proxies that answer with an
+ * HTML error page (502/500) instead of JSON. Poru feeds that string straight
+ * into its Response class, producing the useless error
+ * "Cannot create property 'loadType' on string '<html>…'".
+ * Translate it into something a human can act on.
+ */
+async function safeResolve(poru, payload) {
+    let res;
+    try {
+        res = await poru.resolve(payload);
+    } catch (e) {
+        const msg = String(e?.message || e);
+        if (/Cannot create property 'loadType'|<html|Unexpected token|is not valid JSON/i.test(msg)) {
+            throw new Error("Node Lavalink membalas halaman error (bukan JSON) — node sedang down atau dibatasi");
+        }
+        throw e;
+    }
+    // Some node versions return the raw body instead of a Response object.
+    if (!res || typeof res !== "object" || typeof res.loadType !== "string") {
+        throw new Error("Node Lavalink membalas data yang tidak valid — coba lagi atau ganti node");
+    }
+    return res;
+}
+
 async function searchTracks(poru, query, requester) {
     const node = [...poru.nodes.values()].find((n) => n.isConnected);
     if (!node) throw new Error("Lavalink node is not connected");
@@ -43,7 +71,7 @@ async function searchTracks(poru, query, requester) {
         q = q.replace(/^(ytsearch|ytmsearch|spsearch|dzsearch|amsearch|scsearch):/i, "");
         if (!q) throw new Error("Empty query");
     }
-    const res = await poru.resolve({ query: q, source: "ytsearch", requester });
+    const res = await safeResolve(poru, { query: q, source: "ytsearch", requester });
     if (!res) throw new Error("Lavalink did not respond");
     if (res.loadType === "empty" || res.loadType === "error") {
         throw new Error("No results");
@@ -75,7 +103,7 @@ async function searchTracksAuto(poru, query, requester, extraSources = []) {
         const node = [...poru.nodes.values()].find((n) => n.isConnected);
         if (!node) throw new Error("Lavalink node is not connected");
         try {
-            const res = await poru.resolve({
+            const res = await safeResolve(poru, {
                 query: attempt.q,
                 ...(attempt.source ? { source: attempt.source } : {}),
                 requester,
