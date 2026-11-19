@@ -127,13 +127,13 @@ OOM-kills the process. That is why the bot starts small and "swells" later.
 `npm start` therefore caps the heap explicitly:
 
 ```
-npm start            # node --max-old-space-size=160 index.js
+npm start            # node --max-old-space-size=512 index.js
 npm run start:plain  # no cap — only for hosts with plenty of RAM
 ```
 
 Measured ceiling for each value (`v8.getHeapStatistics().heap_size_limit`):
 
-| `--max-old-space-size` | heap ceiling | leaves for native + ffmpeg/yt-dlp on 500 MB |
+| `--max-old-space-size` | heap ceiling | leaves room for native + ffmpeg/yt-dlp on this 2 GB host |
 |---|---|---|
 | 128 | 320 MB | 180 MB |
 | **160 (default)** | **352 MB** | **148 MB** |
