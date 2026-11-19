@@ -557,7 +557,12 @@ function buildServer(ctx) {
             if (!require("fs").existsSync(coverPath)) {
                 return res.status(404).json({ error: "Cover not found" });
             }
-            res.sendFile(coverPath);
+            // The path is already validated by resolveCoverPath (numeric
+            // filename + whitelisted extension), so `dotfiles: "allow"` is safe.
+            // Without it, `send` 404s whenever DATA_DIR sits under a dotted
+            // directory (e.g. TMPDIR=/home/user/.hermes/...) even though the
+            // file exists.
+            res.sendFile(coverPath, { dotfiles: "allow" });
         } catch (e) { res.status(404).json({ error: "Cover not found" }); }
     });
 

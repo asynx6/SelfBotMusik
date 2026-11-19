@@ -27,6 +27,10 @@ async function applyRuntimeConfig(patch, ctx) {
         if (k in (patch || {})) {
             const v = patch[k];
             if (v === null || v === undefined) continue;
+            // Blank password from the dashboard means "keep the saved one":
+            // publicConfig() never returns the real secret, so the input is
+            // empty on every load and would otherwise wipe it to "" (→ WS 401).
+            if (k === "lavaPass" && v === "") continue;
             if (Runtime[k] === v) continue;
             changed[k] = { from: Runtime[k], to: v };
             Runtime[k] = v;
