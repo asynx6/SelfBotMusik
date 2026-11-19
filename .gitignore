@@ -30,3 +30,6 @@ test_tmp/
 *.swo
 .DS_Store
 Thumbs.db
+
+# --- Runtime logs ---
+*.log
