@@ -10,7 +10,7 @@
         "test": "node --test test/**/*.test.js",
         "setup:bin": "node scripts/fetch-binaries.js",
         "update:bin": "node scripts/fetch-binaries.js --force",
-        "postinstall": "node scripts/fetch-binaries.js --quiet"
+        "postinstall": "node scripts/fetch-binaries.js --quiet && node scripts/patch-poru.js"
     },
     "keywords": [
         "discord",
