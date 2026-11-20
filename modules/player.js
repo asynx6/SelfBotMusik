@@ -60,7 +60,21 @@ async function safeResolve(poru, payload) {
     return res;
 }
 
-async function searchTracks(poru, query, requester) {
+// A public node can drop its WS for a second mid-request. Retry once before
+// surfacing "not connected" — the node usually reconnects on its own, and a
+// failed search must not look like a broken dashboard.
+const RECONNECTABLE_ERROR = /not connected|disconnected|node.*lavalink|lavalink.*node|websocket/i;
+async function retryOnceOnNodeDrop(fn) {
+    try {
+        return await fn();
+    } catch (e) {
+        if (!RECONNECTABLE_ERROR.test(String(e?.message || e))) throw e;
+        await new Promise((r) => setTimeout(r, 350));
+        return fn();
+    }
+}
+
+async function _searchTracks(poru, query, requester) {
     const node = [...poru.nodes.values()].find((n) => n.isConnected);
     if (!node) throw new Error("Lavalink node is not connected");
 
@@ -86,7 +100,7 @@ async function searchTracks(poru, query, requester) {
 // Tries, in order: the query as-is (URLs pass through), then explicit
 // search prefixes for sources the default search may miss. Returns ALL
 // resolved tracks — playlists return their full track list.
-async function searchTracksAuto(poru, query, requester, extraSources = []) {
+async function _searchTracksAuto(poru, query, requester, extraSources = []) {
     const attempts = [];
     if (/^https?:\/\//i.test(query)) {
         attempts.push({ q: query, source: undefined });
@@ -122,6 +136,14 @@ async function searchTracksAuto(poru, query, requester, extraSources = []) {
         }
     }
     throw lastError || new Error("No results");
+}
+
+async function searchTracks(poru, query, requester) {
+    return retryOnceOnNodeDrop(() => _searchTracks(poru, query, requester));
+}
+
+async function searchTracksAuto(poru, query, requester, extraSources = []) {
+    return retryOnceOnNodeDrop(() => _searchTracksAuto(poru, query, requester, extraSources));
 }
 
 // --- queue-append vs start-fresh logic ---

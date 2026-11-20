@@ -18,8 +18,10 @@ async function applyRuntimeConfig(patch, ctx) {
     //   - State, patch()
     const allowed = ["guildId", "channelId", "lavaHost", "lavaPort", "lavaPass", "lavaSecure", "chatRequestsEnabled"];
     const chk = async () => {
-        const p = ctx.getPlayer?.();
-        if (p && typeof ctx.stopAll === "function") { try { await ctx.stopAll(false); } catch {} }
+        // Clear the controller too: playerMod.stopAll() only patches State,
+        // while PlayerController still owns queue/currentIndex and would
+        // re-broadcast a stale "playing" track on the next tick.
+        if (typeof ctx.stopAll === "function") { try { await ctx.stopAll(false); } catch {} }
     };
     const changed = {};
     let touched = false;
@@ -64,7 +66,14 @@ async function applyRuntimeConfig(patch, ctx) {
             return { changed: true, cleared: true };
         }
 
+        // Only a real Lavalink field change may cycle the node. A chat-toggle
+        // save must persist silently — it was killing the music mid-playback.
+        if (!lavaChanged && !channelOrGuildChanged) {
+            return { changed: true, restarted: false };
+        }
+
         if (channelOrGuildChanged && !lavaChanged) {
+            await chk();
             try { await ctx.leaveVC(false); } catch {}
             try {
                 await ctx.ensurePoru();

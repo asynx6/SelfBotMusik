@@ -484,7 +484,17 @@ function serializeTrack(t, isCurrent) {
         isCurrent,
     };
 }
-function stopAll() { return playerMod.stopAll(poru, runtimeMod.Runtime); }
+async function stopAll() {
+    // playerMod.stopAll() only patches State. Without clearing the controller,
+    // its next state emit resurrects a stale "playing" track (silent playback
+    // in the UI) after a settings save or node cycle.
+    if (playerController) {
+        try { await playerController.stop(); } catch (e) {
+            console.warn("controller stop:", e.message);
+        }
+    }
+    return playerMod.stopAll(poru, runtimeMod.Runtime);
+}
 function broadcastNow() { stateMod.emitter.emit("change"); }
 
 // === Unified PlayerController (task 9) ===

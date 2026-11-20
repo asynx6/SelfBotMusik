@@ -16,6 +16,8 @@ export default function SettingsView({ onNotification }) {
   });
 
   const [loading, setLoading] = useState(true);
+  const [savingPrefs, setSavingPrefs] = useState(false);
+  const [savingLavalink, setSavingLavalink] = useState(false);
   const [currentPw, setCurrentPw] = useState("");
   const [newPw, setNewPw] = useState("");
   const [confirmPw, setConfirmPw] = useState("");
@@ -30,11 +32,45 @@ export default function SettingsView({ onNotification }) {
 
   const handleSave = async (e) => {
     e.preventDefault();
+    setSavingPrefs(true);
     try {
-      await api.saveSettings(config);
-      onNotification?.("success", "Pengaturan berhasil disimpan");
+      // Preferences never include Lavalink fields. Saving one must not cycle
+      // the node and kill playback (the old combined button did exactly that).
+      const res = await api.saveSettings({
+        guildId: config.guildId,
+        channelId: config.channelId,
+        chatRequestsEnabled: config.chatRequestsEnabled,
+      });
+      setConfig((prev) => ({ ...prev, ...(res.config || {}), lavaPass: "" }));
+      onNotification?.("success", "Preferensi berhasil disimpan");
     } catch (err) {
       onNotification?.("error", err.message);
+    } finally {
+      setSavingPrefs(false);
+    }
+  };
+
+  const handleSaveLavalink = async (e) => {
+    e.preventDefault();
+    setSavingLavalink(true);
+    try {
+      const res = await api.saveSettings({
+        lavaHost: config.lavaHost,
+        lavaPort: config.lavaPort,
+        lavaPass: config.lavaPass,
+        lavaSecure: config.lavaSecure,
+      });
+      setConfig((prev) => ({ ...prev, ...(res.config || {}), lavaPass: "" }));
+      onNotification?.(
+        "success",
+        res.changed
+          ? "Pengaturan Lavalink berhasil disimpan. Node diperbarui — putar ulang lagu jika perlu."
+          : "Pengaturan Lavalink sudah sesuai, tidak ada perubahan."
+      );
+    } catch (err) {
+      onNotification?.("error", err.message);
+    } finally {
+      setSavingLavalink(false);
     }
   };
 
@@ -124,7 +160,7 @@ export default function SettingsView({ onNotification }) {
           background: "var(--bg-tertiary)",
           border: "var(--border)",
           title: "Lavalink belum dikonfigurasi",
-          detail: "Isi host dan password di bawah lalu Simpan Pengaturan. Mode offline tetap tersedia.",
+          detail: "Isi host dan password di bawah lalu Simpan Lavalink. Mode offline tetap tersedia.",
         };
 
   return (
@@ -185,7 +221,9 @@ export default function SettingsView({ onNotification }) {
         </button>
       </div>
 
-      <form onSubmit={handleSave} style={{ display: "flex", flexDirection: "column", gap: 20 }}>
+      {/* Two independent save buttons: preferences never touch the Lavalink
+          node, so a chat-toggle save cannot stop playback mid-song. */}
+      <div style={{ display: "flex", flexDirection: "column", gap: 20 }}>
         <div>
           <label style={{ display: "block", fontSize: 13, fontWeight: 600, marginBottom: 6 }}>Guild ID (Discord Server)</label>
           <input
@@ -288,6 +326,33 @@ export default function SettingsView({ onNotification }) {
             />
             <span>Gunakan SSL / TLS (Secure WSS)</span>
           </label>
+
+          <div style={{ marginTop: 14 }}>
+            <button
+              type="button"
+              onClick={handleSaveLavalink}
+              disabled={savingLavalink}
+              style={{
+                padding: "10px 20px",
+                background: "var(--bg-secondary)",
+                border: "1px solid var(--accent)",
+                color: "var(--accent)",
+                borderRadius: "var(--radius-sm)",
+                fontWeight: 700,
+                fontSize: 13,
+                display: "flex",
+                alignItems: "center",
+                gap: 8,
+                opacity: savingLavalink ? 0.6 : 1,
+              }}
+            >
+              <Save size={16} /> {savingLavalink ? "Menyimpan…" : "Simpan Lavalink"}
+            </button>
+            <p style={{ color: "var(--fg-muted)", fontSize: 11.5, marginTop: 8 }}>
+              Hanya tombol ini yang mengganti node. Perubahan nyata menghentikan lagu saat ini;
+              menyimpan tanpa perubahan tidak mengganggu pemutaran.
+            </p>
+          </div>
         </div>
 
         <div style={{ borderTop: "1px solid var(--border)", paddingTop: 20 }}>
@@ -310,7 +375,9 @@ export default function SettingsView({ onNotification }) {
 
         <div style={{ marginTop: 12 }}>
           <button
-            type="submit"
+            type="button"
+            onClick={handleSave}
+            disabled={savingPrefs}
             style={{
               padding: "12px 28px",
               background: "var(--accent)",
@@ -320,14 +387,19 @@ export default function SettingsView({ onNotification }) {
               display: "flex",
               alignItems: "center",
               gap: 8,
+              opacity: savingPrefs ? 0.6 : 1,
             }}
           >
-            <Save size={18} /> Simpan Pengaturan
+            <Save size={18} /> {savingPrefs ? "Menyimpan…" : "Simpan Preferensi"}
           </button>
+          <p style={{ color: "var(--fg-muted)", fontSize: 11.5, marginTop: 8 }}>
+            Preferensi (termasuk request via chat Discord) tidak menyentuh Lavalink dan aman
+            disimpan saat lagu sedang diputar.
+          </p>
         </div>
-      </form>
+      </div>
 
-      {/* Account security. Kept outside the settings <form> above so these
+      {/* Account security. Kept outside the settings block above so these
           fields cannot submit — or be submitted by — the bot configuration. */}
       <section style={{ borderTop: "1px solid var(--border)", marginTop: 30, paddingTop: 24 }}>
         <div style={{ display: "flex", alignItems: "center", gap: 10, marginBottom: 6 }}>

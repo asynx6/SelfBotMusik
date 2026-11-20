@@ -263,7 +263,9 @@ without needing a Linux machine.
    - Guild (Server) ID
    - Voice Channel ID
    - Lavalink host / port / password (and TLS on/off)
-4. Click **Save &amp; reconnect**.
+4. Click **Simpan Preferensi** (Guild / Channel / chat requests) and **Simpan Lavalink**
+   (host / port / password / TLS). The two buttons are separate on purpose: saving
+   preferences never cycles the node or stops a playing track.
 5. Click **Connect** → the bot connects to Lavalink then joins your VC.
 6. Start adding tracks from the Search bar.
 

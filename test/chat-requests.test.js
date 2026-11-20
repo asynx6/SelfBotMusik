@@ -4,7 +4,7 @@ const test = require("node:test");
 const assert = require("node:assert");
 
 // searchTracksAuto: test the multi-source fallback and playlist handling.
-const { searchTracksAuto } = require("../modules/player");
+const { searchTracks, searchTracksAuto } = require("../modules/player");
 
 function makeMockPoru(responses) {
     // responses: array of { loadType, tracks, playlist } returned in order
@@ -71,4 +71,28 @@ test("searchTracksAuto: all sources empty throws last error", async () => {
         () => searchTracksAuto(poru, "nothing matches", "req", ["spsearch", "scsearch"]),
         /No results/
     );
+});
+
+test("searchTracks: retries once after a transient node disconnect", async () => {
+    const poru = makeMockPoru([
+        { loadType: "search", tracks: [{ info: { identifier: "s1", title: "Silence", sourceName: "youtube" } }] },
+    ]);
+    poru.nodes.get("main").isConnected = false;
+    setTimeout(() => { poru.nodes.get("main").isConnected = true; }, 100);
+    const out = await searchTracks(poru, "Silence by Marshmello", "req");
+    assert.equal(out.length, 1);
+    assert.equal(out[0].info.title, "Silence");
+    assert.equal(poru._calls.length, 1);
+});
+
+test("searchTracksAuto: retries once after a transient node disconnect", async () => {
+    const poru = makeMockPoru([
+        { loadType: "search", tracks: [{ info: { identifier: "s2", title: "Silence auto", sourceName: "youtube" } }] },
+    ]);
+    poru.nodes.get("main").isConnected = false;
+    setTimeout(() => { poru.nodes.get("main").isConnected = true; }, 100);
+    const out = await searchTracksAuto(poru, "Silence by Marshmello", "req", []);
+    assert.equal(out.tracks.length, 1);
+    assert.equal(out.tracks[0].info.title, "Silence auto");
+    assert.equal(poru._calls.length, 1);
 });
