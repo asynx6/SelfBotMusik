@@ -301,6 +301,13 @@ class LavalinkEngine extends BaseEngine {
         // of a long session was a burst of tracks firing back to back, then
         // silence. One owner of the queue is enough — ours.
         const encoded = track.track;
+        if (process.env.DEBUG_TRACK === "1") {
+            console.log(
+                `[lavalink] load "${trackRow.title || "?"}" → `
+                + `${track.info?.title || "?"} | ${track.info?.identifier || "?"} | `
+                + `${String(encoded || "").slice(0, 24)}… | session=${player.node?.sessionId || "?"}`
+            );
+        }
         if (player.node?.rest?.updatePlayer) {
             await player.node.rest.updatePlayer({
                 guildId: this.guildId,

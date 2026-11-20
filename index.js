@@ -629,7 +629,7 @@ poru.on("trackStart", (player, track) => {
     stateMod.patch({ paused: false });
     syncStateFromPlayer();
     broadcastNow();
-    console.log(`▶️  Now playing: ${track.info?.title || "?"}`);
+    console.log(`▶️  Now playing: ${track?.info?.title || "?"}`);
 });
 poru.on("trackEnd", (player, track, data) => {
     if (player.guildId !== runtimeMod.Runtime.guildId) return;
@@ -639,7 +639,7 @@ poru.on("trackEnd", (player, track, data) => {
 });
 poru.on("trackStuck", (player, track, thresholdMs) => {
     if (player.guildId !== runtimeMod.Runtime.guildId) return;
-    console.warn(`⚠️  Stuck: ${track.info?.title} (${thresholdMs}ms)`);
+    console.warn(`⚠️  Stuck: ${track?.info?.title || "?"} (${thresholdMs}ms)`);
     player.skip().catch(() => {});
 });
 poru.on("trackError", (player, track, data) => {
