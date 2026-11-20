@@ -5,6 +5,7 @@
     "main": "index.js",
     "scripts": {
         "start": "node --max-old-space-size=512 index.js",
+        "start:supervised": "node scripts/supervise.js",
         "start:plain": "node index.js",
         "dev": "node index.js",
         "test": "node --test test/**/*.test.js",

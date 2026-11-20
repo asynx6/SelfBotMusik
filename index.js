@@ -244,6 +244,9 @@ async function joinVC(guildId, channelId, { lavalinkUp } = {}) {
     if (!guildId || !channelId) {
         throw new Error("guildId and channelId are required to join a voice channel");
     }
+    // The saved voice target is the durable intent: stay here across restarts.
+    // Only an explicit Leave from the dashboard flips it back off.
+    db.setSetting("voice_stay", "1");
     if (!client.user?.id && client.ws?.status !== 0) {
         await new Promise((res) => client.once("ready", res));
     }
@@ -408,7 +411,12 @@ async function leaveVC(force = false, intentional = false) {
     if (!force && isPlaying) {
         throw new Error("A track is playing — Stop first before disconnecting (use force=true to override)");
     }
-    if (intentional) intentionalDisconnect = true;
+    if (intentional) {
+        intentionalDisconnect = true;
+        // A deliberate Leave must survive a supervised restart — otherwise the
+        // watchdog would put the bot back in the channel the user just left.
+        db.setSetting("voice_stay", "0");
+    }
 
     // 1) The controller's active engine (LocalEngine for offline playback) owns
     //    the REAL voice connection. Destroying it is what actually makes the bot
@@ -750,8 +758,26 @@ client.once("ready", async () => {
         console.log("⚠️  Lavalink host not configured. Open Settings → Connect to set it up.");
     } else if (!rt.guildId || !rt.channelId) {
         console.log("⚠️  Guild / Voice Channel not set. Open Settings → Connect to choose them.");
+    } else if (db.getSetting("voice_stay", "1") === "0") {
+        console.log("ℹ️  Voice stay-off — tidak auto-join (bot sengaja dikeluarkan dari dashboard).");
     } else {
-        console.log("ℹ️  Settings complete. Click Connect in the dashboard when ready.");
+        // A supervised restart must not need a human to click Connect. The
+        // saved guild/channel are the durable "stay in this VC" intent, so
+        // rejoin them on every boot once the node answers.
+        console.log("🔁 Auto-rejoin VC after boot…");
+        try {
+            await ensurePoru();
+            const t0 = Date.now();
+            while (!stateMod.State.connected && Date.now() - t0 < 15000) {
+                await new Promise((r) => setTimeout(r, 200));
+            }
+            const lavalinkUp = !!stateMod.State.connected;
+            if (!lavalinkUp) console.warn("⚠️  Lavalink belum siap saat boot — join VC mode lokal");
+            await joinVC(rt.guildId, rt.channelId, { lavalinkUp });
+            console.log(`✅ Auto-rejoin VC berhasil (${lavalinkUp ? "lavalink" : "lokal"})`);
+        } catch (e) {
+            console.error(`❌ Auto-rejoin VC gagal: ${e.message}`);
+        }
     }
 });
 

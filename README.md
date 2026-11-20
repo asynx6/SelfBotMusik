@@ -126,10 +126,20 @@ OOM-kills the process. That is why the bot starts small and "swells" later.
 
 `npm start` therefore caps the heap explicitly:
 
+`npm run start:supervised` menjalankan watchdog yang me-restart bot otomatis
+jika mati / tidak sehat / heap mendekati batas, lalu bot auto-rejoin voice saat
+boot. Intent voice disimpan di SQLite: kalau kamu klik Disconnect dari web,
+setting `voice_stay=0` membuat bot tidak masuk lagi setelah restart. Connect
+dari web mengembalikannya ke `1`.
+
 ```
-npm start            # node --max-old-space-size=512 index.js
-npm run start:plain  # no cap — only for hosts with plenty of RAM
+npm run start:supervised  # direkomendasikan untuk jaga voice 24/7
+npm start                 # bot saja, tanpa watchdog
+npm run start:plain       # tanpa cap heap — hanya untuk host besar
 ```
+
+`npm run start:supervised` juga punya `/healthz` (tanpa auth) untuk probe:
+`pid`, `uptime`, `rss`, `heapUsed`, `botReady`, `voiceConnected`.
 
 Measured ceiling for each value (`v8.getHeapStatistics().heap_size_limit`):
 
@@ -139,9 +149,10 @@ Measured ceiling for each value (`v8.getHeapStatistics().heap_size_limit`):
 | **160 (default)** | **352 MB** | **148 MB** |
 | 192 | 384 MB | 116 MB |
 | 256 | 448 MB | 52 MB |
+| 512 | 1 GB | — |
 
-Raise the number if you move to a 1 GB panel; the app itself idles well below
-100 MB of heap, so the cap is a safety net, not a working limit.
+Aplikasi idling di bawah 100 MB heap; 512 dipakai sebagai headroom untuk
+watchdog, bukan working limit.
 
 A watchdog prints one line every 10 minutes (`MEMORY_LOG_MS=0` disables it):
 

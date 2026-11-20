@@ -62,6 +62,23 @@ function buildServer(ctx) {
     const broadcaster = createBroadcaster({ getSnapshot: () => stateMod.snapshot() });
     const onChange = () => broadcaster.request("change");
 
+    // Lightweight liveness probe for the local supervisor. No auth, no state
+    // mutation, no secrets — it only reports whether the process is alive and
+    // where its heap stands so the watchdog can recycle before an OOM.
+    app.get("/healthz", (req, res) => {
+        const mem = process.memoryUsage();
+        res.json({
+            ok: true,
+            pid: process.pid,
+            uptime: Math.round(process.uptime()),
+            rss: mem.rss,
+            heapUsed: mem.heapUsed,
+            botReady: !!stateMod.State.botReady,
+            voiceConnected: !!stateMod.State.voiceConnected,
+            connected: !!stateMod.State.connected,
+        });
+    });
+
     // --- Auth gate: all /api/* except /api/auth/* and /api/stream/* need a valid JWT cookie. ---
     app.use("/api", (req, res, next) => {
         if (req.path.startsWith("/auth/") || req.path === "/auth") return next();
