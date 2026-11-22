@@ -44,7 +44,14 @@ class LavalinkEngine extends BaseEngine {
         this._onPlayerTrackStuck = null;
     }
 
+    // Reasons that mean *we* ended the track (skip / play-now / jump / stop),
+    // not that it finished. They must never be reported as an end: the latch
+    // below is one-shot, so letting "replaced" through made the NEXT real end
+    // invisible — music stopped with tracks still queued.
+    static IGNORED_END_REASONS = new Set(["replaced", "cleanup", "stop"]);
+
     _emitEnd(reason = "finished") {
+        if (LavalinkEngine.IGNORED_END_REASONS.has(reason)) return;
         if (this._trackEnded) return;
         this._trackEnded = true;
         this.emit("end", { reason });

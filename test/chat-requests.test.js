@@ -96,3 +96,24 @@ test("searchTracksAuto: retries once after a transient node disconnect", async (
     assert.equal(out.tracks[0].info.title, "Silence auto");
     assert.equal(poru._calls.length, 1);
 });
+
+test("searchTracks: dashboard search asks for every candidate with opts.all", async () => {
+    const candidates = [
+        { info: { identifier: "c1", title: "Sporty One", sourceName: "youtube" } },
+        { info: { identifier: "c2", title: "Sporty Two", sourceName: "youtube" } },
+        { info: { identifier: "c3", title: "Sporty Three", sourceName: "youtube" } },
+    ];
+
+    const one = await searchTracks(
+        makeMockPoru([{ loadType: "search", tracks: candidates }]),
+        "sporty", "req"
+    );
+    assert.equal(one.length, 1, "without opts.all only the best match is returned");
+
+    const all = await searchTracks(
+        makeMockPoru([{ loadType: "search", tracks: candidates }]),
+        "sporty", "req", { all: true }
+    );
+    assert.equal(all.length, 3, "opts.all returns the whole candidate list");
+    assert.equal(all[2].info.title, "Sporty Three");
+});

@@ -74,7 +74,7 @@ async function retryOnceOnNodeDrop(fn) {
     }
 }
 
-async function _searchTracks(poru, query, requester) {
+async function _searchTracks(poru, query, requester, opts = {}) {
     const node = [...poru.nodes.values()].find((n) => n.isConnected);
     if (!node) throw new Error("Lavalink node is not connected");
 
@@ -91,7 +91,10 @@ async function _searchTracks(poru, query, requester) {
         throw new Error("No results");
     }
     if (res.loadType === "track") return [res.tracks[0]];
-    if (res.loadType === "search") return [res.tracks[0]];
+    // A text query resolves to N candidates. Chat requests and `enqueue` only
+    // want the best match (queueing ten near-duplicates of "Silence" is wrong),
+    // so the full list is opt-in for the dashboard's search page.
+    if (res.loadType === "search") return opts.all ? res.tracks : [res.tracks[0]];
     if (res.loadType === "playlist") return res.tracks;
     return [];
 }
@@ -138,8 +141,8 @@ async function _searchTracksAuto(poru, query, requester, extraSources = []) {
     throw lastError || new Error("No results");
 }
 
-async function searchTracks(poru, query, requester) {
-    return retryOnceOnNodeDrop(() => _searchTracks(poru, query, requester));
+async function searchTracks(poru, query, requester, opts = {}) {
+    return retryOnceOnNodeDrop(() => _searchTracks(poru, query, requester, opts));
 }
 
 async function searchTracksAuto(poru, query, requester, extraSources = []) {

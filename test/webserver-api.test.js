@@ -102,6 +102,7 @@ class MockEngine extends BaseEngine {
 // ---- Build server under test ----
 const downloads = createMockDownloads();
 let searchResults = [];
+const searchOpts = [];
 
 const controller = new PlayerController({
     dataDir: tmpDir,
@@ -115,7 +116,7 @@ const ctx = {
     library,
     downloads,
     playerController: controller,
-    searchTracks: async (query) => searchResults,
+    searchTracks: async (query, requester, opts) => { searchOpts.push(opts); return searchResults; },
     RuntimeSnapshot: () => ({}),
     syncStateFromPlayer: () => {},
     getPlayer: () => null,
@@ -419,4 +420,16 @@ test("tab paths redirect to /login without a session cookie", async () => {
 test("unknown path is not mistaken for a tab", async () => {
     const res = await request("GET", "/tidak-ada-tab-ini");
     assert.equal(res.status, 404);
+});
+
+test("POST /api/search asks the search service for every candidate", async () => {
+    searchResults = [
+        { sourceName: "youtube", identifier: "sporty1", title: "Sporty One", author: "A", length: 60000, uri: "u1" },
+        { sourceName: "youtube", identifier: "sporty2", title: "Sporty Two", author: "B", length: 60000, uri: "u2" },
+    ];
+    searchOpts.length = 0;
+    const res = await request("POST", "/api/search", { query: "sporty" });
+    assert.equal(res.status, 200);
+    assert.equal(searchOpts.length, 1);
+    assert.equal(searchOpts[0]?.all, true, "the search page needs the whole candidate list");
 });

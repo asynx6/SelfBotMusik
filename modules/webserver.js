@@ -520,7 +520,7 @@ function buildServer(ctx) {
             const query = String(req.body?.query || "").trim();
             if (!query) return res.status(400).json({ error: "Query required" });
             const requester = req.body?.requester || "Web";
-            const infos = await searchTracksFn(query, requester);
+            const infos = await searchTracksFn(query, requester, { all: true });
             if (!infos || !infos.length) return res.status(404).json({ error: "No results" });
             const out = infos.map((info) => {
                 const row = lib.upsertFromLavalink(info);

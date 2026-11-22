@@ -617,8 +617,10 @@ const ctx = {
     playerController,
     // Adapter: searchTracks returns Poru Track objects ({ track, info }) —
     // webserver/library expect plain info objects. Flatten + keep encoded for LavalinkEngine.
-    searchTracks: async (query, requester) => {
-        const tracks = await playerMod.searchTracks(poru, query, requester);
+    // `all` is set by the dashboard search page: it wants every candidate, while
+    // chat requests keep the single best match.
+    searchTracks: async (query, requester, opts) => {
+        const tracks = await playerMod.searchTracks(poru, query, requester, opts);
         return tracks.map((t) => ({ ...t.info, encoded: t.track, requester: t.requester }));
     },
 };

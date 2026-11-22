@@ -8,6 +8,7 @@ export default function DiscoverView({ onNotification }) {
   const [query, setQuery] = useState("");
   const [results, setResults] = useState([]);
   const [loading, setLoading] = useState(false);
+  const [addingAll, setAddingAll] = useState(false);
 
   const handleSearch = async (e) => {
     e.preventDefault();
@@ -41,6 +42,22 @@ export default function DiscoverView({ onNotification }) {
       onNotification?.("success", `Ditambahkan ke antrian: ${track.title}`);
     } catch (err) {
       onNotification?.("error", err.message);
+    }
+  };
+
+  const handleAddAll = async () => {
+    if (!results.length) return;
+    setAddingAll(true);
+    try {
+      // One request for the whole result set: the controller appends the batch
+      // in one go instead of one round trip per song.
+      const ids = results.map((t) => t.id).filter((id) => Number.isInteger(id));
+      const res = await api.addToQueue(ids);
+      onNotification?.("success", `${res.count ?? ids.length} lagu ditambahkan ke antrian`);
+    } catch (err) {
+      onNotification?.("error", err.message);
+    } finally {
+      setAddingAll(false);
     }
   };
 
@@ -79,9 +96,33 @@ export default function DiscoverView({ onNotification }) {
 
       {/* Results List */}
       <div>
-        <h2 style={{ fontSize: 16, fontWeight: 600, color: "var(--fg-secondary)", marginBottom: 12 }}>
-          {results.length > 0 ? `Hasil Pencarian (${results.length})` : "Belum ada pencarian"}
-        </h2>
+        <div style={{ display: "flex", alignItems: "center", justifyContent: "space-between", gap: 12, marginBottom: 12 }}>
+          <h2 style={{ fontSize: 16, fontWeight: 600, color: "var(--fg-secondary)" }}>
+            {results.length > 0 ? `Hasil Pencarian (${results.length})` : "Belum ada pencarian"}
+          </h2>
+          {results.length > 1 ? (
+            <button
+              onClick={handleAddAll}
+              disabled={addingAll}
+              title="Tambahkan semua hasil ke antrian sekaligus"
+              style={{
+                padding: "8px 14px",
+                background: "var(--bg-secondary)",
+                border: "1px solid var(--accent)",
+                borderRadius: "var(--radius-sm)",
+                color: "var(--accent)",
+                fontWeight: 700,
+                fontSize: 13,
+                display: "flex",
+                alignItems: "center",
+                gap: 7,
+                opacity: addingAll ? 0.6 : 1,
+              }}
+            >
+              <Plus size={15} /> {addingAll ? "Menambahkan…" : `Tambah Semua (${results.length})`}
+            </button>
+          ) : null}
+        </div>
 
         <div style={{ display: "flex", flexDirection: "column", gap: 8 }}>
           {results.map((track) => {
