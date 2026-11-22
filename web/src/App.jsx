@@ -16,6 +16,30 @@ import { useIsMobile } from "./hooks/useMediaQuery";
 import { api } from "./services/api";
 import "./styles/global.css";
 
+// Sidebar tab <-> URL slug. The server serves the shell on each of these paths
+// (see TAB_PATHS in modules/webserver.js), so a bookmark opens the right tab.
+const TAB_SLUGS = {
+  discover: "pencarian",
+  queue: "antrian-putar",
+  library: "perpustakaan",
+  likes: "lagu-disukai",
+  history: "riwayat-putar",
+  downloads: "unduhan",
+  settings: "pengaturan",
+};
+const SLUG_TABS = Object.fromEntries(Object.entries(TAB_SLUGS).map(([t, s]) => [s, t]));
+
+function tabFromPath(pathname) {
+  const seg = pathname.split("/").filter(Boolean);
+  if (seg[0] === "playlist" && seg[1]) return `playlist:${Number(seg[1])}`;
+  return SLUG_TABS[seg[0]] || "discover";
+}
+
+function pathFromTab(tab) {
+  if (tab.startsWith("playlist:")) return `/playlist/${tab.split(":")[1]}`;
+  return `/${TAB_SLUGS[tab] || TAB_SLUGS.discover}`;
+}
+
 export default function App() {
   return (
     <DialogProvider>
@@ -27,7 +51,8 @@ export default function App() {
 }
 
 function AppShell() {
-  const [currentTab, setCurrentTab] = useState("discover");
+  // Deep link: /antrian-putar opens the queue tab directly.
+  const [currentTab, setCurrentTabState] = useState(() => tabFromPath(window.location.pathname));
   const [playlists, setPlaylists] = useState([]);
   const [notification, setNotification] = useState(null);
   const [drawerOpen, setDrawerOpen] = useState(false);
@@ -46,6 +71,36 @@ function AppShell() {
   useEffect(() => {
     loadPlaylists();
   }, []);
+
+  // URL follows the active tab (pushState) and the back button restores it.
+  const setCurrentTab = (tab) => {
+    setCurrentTabState(tab);
+    const next = pathFromTab(tab);
+    if (next !== window.location.pathname) window.history.pushState({ tab }, "", next);
+  };
+
+  useEffect(() => {
+    const onPop = () => setCurrentTabState(tabFromPath(window.location.pathname));
+    window.addEventListener("popstate", onPop);
+    // Normalise "/" and unknown slugs to the tab's own path, so a refresh keeps
+    // the tab instead of bouncing back to the search page.
+    const canonical = pathFromTab(tabFromPath(window.location.pathname));
+    if (window.location.pathname !== canonical) {
+      window.history.replaceState({ tab: currentTab }, "", canonical);
+    }
+    return () => window.removeEventListener("popstate", onPop);
+  }, []);
+
+  // Tab label in the browser tab — makes the bookmarks distinguishable.
+  useEffect(() => {
+    const TITLES = {
+      discover: "Pencarian", queue: "Antrian Putar", library: "Perpustakaan",
+      likes: "Lagu Disukai", history: "Riwayat Putar", downloads: "Unduhan",
+      settings: "Pengaturan",
+    };
+    const label = currentTab.startsWith("playlist:") ? "Playlist" : TITLES[currentTab];
+    document.title = `${label || "Pencarian"} · SelfBotMusic`;
+  }, [currentTab]);
 
   const showNotification = (type, message) => {
     setNotification({ type, message });

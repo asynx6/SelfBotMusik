@@ -392,3 +392,31 @@ test("API requires auth cookie", async () => {
     const res = await fetch(`http://127.0.0.1:${server.address().port}/api/library/tracks`);
     assert.equal(res.status, 401);
 });
+
+// ---- Pretty per-tab URLs -------------------------------------------------
+// Each sidebar tab must be reachable at its own path so a link/bookmark opens
+// that tab. The shell is the same index.html; the client picks the tab from
+// location.pathname.
+const TAB_PATHS = ["/pencarian", "/antrian-putar", "/perpustakaan", "/lagu-disukai", "/riwayat-putar", "/unduhan", "/pengaturan", "/playlist/3"];
+
+test("tab paths serve the dashboard shell when authenticated", async () => {
+    for (const p of TAB_PATHS) {
+        const res = await request("GET", p);
+        assert.equal(res.status, 200, `${p} should be 200, got ${res.status}`);
+        assert.match(res.text, /<div id="root">/, `${p} should serve the app shell`);
+    }
+});
+
+test("tab paths redirect to /login without a session cookie", async () => {
+    const port = server.address().port;
+    for (const p of TAB_PATHS) {
+        const res = await fetch(`http://127.0.0.1:${port}${p}`, { redirect: "manual" });
+        assert.equal(res.status, 302, `${p} should redirect, got ${res.status}`);
+        assert.equal(res.headers.get("location"), "/login");
+    }
+});
+
+test("unknown path is not mistaken for a tab", async () => {
+    const res = await request("GET", "/tidak-ada-tab-ini");
+    assert.equal(res.status, 404);
+});

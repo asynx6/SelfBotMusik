@@ -26,6 +26,11 @@ const HEAP_CEILING_MB = Number(process.env.HEAP_CEILING_MB || 512);
 // Recycle at ~80% of the ceiling: enough headroom for the graceful shutdown
 // to finish before V8 would abort the process.
 const RECYCLE_AT_MB = Number(process.env.RECYCLE_AT_MB || Math.floor(HEAP_CEILING_MB * 0.8));
+// RSS is what the kernel actually kills on. V8 keeps reclaimed pages mapped,
+// so a healthy process plateaus around 500MB on this host while `heapUsed`
+// sits near 180MB — watching the heap alone never fires and the memcg OOM
+// killer wins. Recycle on RSS before that happens.
+const RSS_RECYCLE_MB = Number(process.env.RSS_RECYCLE_MB || 430);
 const HEALTH_URL = `http://127.0.0.1:${Number(process.env.WEB_PORT || 3434)}/healthz`;
 const CHECK_MS = Number(process.env.SUPERVISOR_CHECK_MS || 15000);
 const RESTART_DELAY_MS = Number(process.env.SUPERVISOR_RESTART_MS || 3000);
@@ -134,6 +139,14 @@ async function checkHealth() {
             stopBot("heap recycle");
             return;
         }
+        // RSS is the kernel's kill signal. Recycle here even when the heap is
+        // healthy, otherwise the memcg OOM killer takes the process and the
+        // Discord voice session dies without a graceful shutdown.
+        if (rssMb >= RSS_RECYCLE_MB) {
+            log(`RSS ${rssMb}MB >= ${RSS_RECYCLE_MB}MB — controlled restart before memcg OOM`);
+            stopBot("rss recycle");
+            return;
+        }
         log(`health ok heap=${heapMb}MB rss=${rssMb}MB voice=${h.voiceConnected ? "in" : "out"} uptime=${h.uptime}s`);
     } catch (e) {
         if (stopping || draining) return;
@@ -168,7 +181,7 @@ process.on("SIGINT", shutdown);
 process.on("SIGTERM", shutdown);
 
 claimPid();
-log(`Supervisor pid=${process.pid} heapCeiling=${HEAP_CEILING_MB}MB recycleAt=${RECYCLE_AT_MB}MB`);
+log(`Supervisor pid=${process.pid} heapCeiling=${HEAP_CEILING_MB}MB recycleAt=${RECYCLE_AT_MB}MB rssRecycleAt=${RSS_RECYCLE_MB}MB`);
 startBot();
 checkTimer = setInterval(checkHealth, CHECK_MS);
 checkTimer.unref();

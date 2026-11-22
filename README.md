@@ -9,6 +9,7 @@ your own Lavalink v4 server and exposes a sleek web dashboard for control.
 -  🔌 Manual connect / disconnect (bot never auto-joins VC)
 -  🛡️ Safety: auto rejoin VC on drops, channel deletion, guild logout
 -  🔐 Password-protected dashboard (JWT cookie, rate-limited login)
+-  🔗 Every sidebar tab has its own URL (`/antrian-putar`, `/perpustakaan`, …)
 -  🗄️ SQLite-backed config, user, JWT secret, audit log
 
 ## Stack
@@ -254,6 +255,26 @@ Two safe ways to deploy:
 The asset mapping is covered by `test/fetch-binaries.test.js`, including the
 `linux/x64` and `linux/x64 + musl` cases, so the Pterodactyl path is verified
 without needing a Linux machine.
+
+## Tab URLs
+
+Each sidebar tab is a real path, so links and bookmarks open the right page.
+The server serves the same shell for all of them; the client picks the tab from
+`location.pathname`. Clicking in the sidebar updates the URL (back/forward work).
+
+| Tab | URL |
+|---|---|
+| Pencarian | `/pencarian` |
+| Antrian Putar | `/antrian-putar` |
+| Perpustakaan | `/perpustakaan` |
+| Lagu Disukai | `/lagu-disukai` |
+| Riwayat Putar | `/riwayat-putar` |
+| Unduhan | `/unduhan` |
+| Pengaturan | `/pengaturan` |
+| Playlist | `/playlist/<id>` |
+
+`/` redirects to `/login` when unauthenticated and otherwise lands on
+`/pencarian`.
 
 ## First boot
 

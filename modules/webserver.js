@@ -101,6 +101,21 @@ function buildServer(ctx) {
         return res.sendFile(indexFile);
     });
 
+    // --- Pretty per-tab URLs (/antrian-putar, /perpustakaan, …). ---
+    // Same shell as "/", so a bookmark or shared link opens that tab. The tab
+    // itself is picked client-side from location.pathname.
+    const TAB_PATHS = ["/pencarian", "/antrian-putar", "/perpustakaan", "/lagu-disukai",
+        "/riwayat-putar", "/unduhan", "/pengaturan"];
+    app.get(TAB_PATHS, (req, res) => {
+        if (!auth.verifyToken(req)) return res.redirect("/login");
+        return res.sendFile(indexFile);
+    });
+    // Playlist detail (/playlist/3) — same shell, the client reads the id.
+    app.get("/playlist/:id", (req, res) => {
+        if (!auth.verifyToken(req)) return res.redirect("/login");
+        return res.sendFile(indexFile);
+    });
+
     // --- Login + static files serving. ---
     app.get("/login", (req, res) => {
         if (auth.verifyToken(req)) return res.redirect("/");
