@@ -26,6 +26,14 @@ async function safeResolve(poru, payload) {
 }
 
 class LavalinkEngine extends BaseEngine {
+    /**
+     * Sources whose tracks are metadata only on a node without mirroring
+     * configured: lavasrc hands back a valid `encoded` string, Lavalink accepts
+     * updatePlayer, then never sends one audio frame. Verified against the
+     * production node — Spotify resolves, plays nothing, position stays 0.
+     */
+    static METADATA_ONLY_SOURCES = new Set(["spotify", "applemusic", "deezer", "tidal", "qobuz", "yandexmusic", "jiosaavn"]);
+
     constructor({ poru, guildId } = {}) {
         super();
         this.name = "lavalink";
@@ -81,6 +89,46 @@ class LavalinkEngine extends BaseEngine {
      * SQLite row stores metadata, not an encoded Lavalink track, so the node
      * has to look it up again.
      */
+    _isMetadataOnly(track, trackRow) {
+        const source = String(
+            track?.info?.sourceName || trackRow?.source_name || ""
+        ).toLowerCase();
+        if (LavalinkEngine.METADATA_ONLY_SOURCES.has(source)) return true;
+        // lavasrc also serves mirrored tracks under `identifier` schemes it owns.
+        const uri = String(track?.info?.uri || trackRow?.uri || "");
+        return /open\.spotify\.com|music\.apple\.com|deezer\.com|tidal\.com|qobuz\.com/i.test(uri);
+    }
+
+    /**
+     * Resolve a playable stream for a metadata-only track.
+     *
+     * Spotify/Deezer/Apple rows carry metadata plus an `encoded` blob that only
+     * describes the metadata — the node cannot stream it without mirroring
+     * configured. Searching a source the node can decode is the only reliable
+     * fallback, and it is what the dashboard shows anyway (title + artist).
+     */
+    async _mirrorToPlayable(track, trackRow) {
+        const title = track?.info?.title || trackRow?.title || "";
+        const artist = track?.info?.author || trackRow?.artist || trackRow?.author || "";
+        const query = [artist, title].filter(Boolean).join(" ").trim()
+            || title
+            || track?.info?.uri
+            || trackRow?.uri
+            || "";
+        if (!query) return null;
+
+        for (const source of ["ytsearch", "scsearch"]) {
+            try {
+                const res = await safeResolve(this.poru, { query, source, requester: this.requester });
+                if ((res.loadType === "search" || res.loadType === "track") && res.tracks?.length) {
+                    const candidate = res.tracks[0];
+                    if (candidate?.track && !this._isMetadataOnly(candidate, null)) return candidate;
+                }
+            } catch { /* try the next source */ }
+        }
+        return null;
+    }
+
     async _resolveRemote(trackRow) {
         const uri = trackRow.uri || trackRow.identifier || "";
         const titleQuery = [trackRow.artist || trackRow.author, trackRow.title]
@@ -297,6 +345,27 @@ class LavalinkEngine extends BaseEngine {
                 `Lavalink tidak bisa memutar "${trackRow.title || "Unknown"}": `
                 + "tidak ada encoded track (resolve gagal atau node tidak mengembalikan lagu)"
             );
+        }
+
+        // A metadata-only track (Spotify & friends on a node without mirroring)
+        // must be swapped for something the node can actually stream BEFORE it
+        // is loaded. Otherwise updatePlayer succeeds, Lavalink sends no frames,
+        // and the user gets "audio tidak keluar" for a perfectly healthy node.
+        if (this._isMetadataOnly(track, trackRow)) {
+            const mirror = await this._mirrorToPlayable(track, trackRow);
+            if (!mirror?.track) {
+                throw new Error(
+                    `Tidak bisa memutar "${trackRow.title || track?.info?.title || "Unknown"}": `
+                    + `sumber ${track?.info?.sourceName || trackRow.source_name || "?"} hanya metadata — `
+                    + `node Lavalink tidak punya mirror/sumber lain yang bisa di-stream. `
+                    + `Aktifkan mirroring di node, atau unduh lagunya untuk diputar offline.`
+                );
+            }
+            console.log(
+                `[lavalink] mirror ${track?.info?.sourceName || "?"} → ${mirror.info?.sourceName || "?"} `
+                + `untuk "${trackRow.title || track?.info?.title || "?"}"`
+            );
+            track = mirror;
         }
 
         // Play the track DIRECTLY through the node instead of pushing it onto
