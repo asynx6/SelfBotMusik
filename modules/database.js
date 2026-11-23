@@ -58,7 +58,8 @@ const SCHEMA_SQL = `
         created_at     INTEGER NOT NULL,
         downloaded_at  INTEGER,
         play_count     INTEGER NOT NULL DEFAULT 0,
-        last_played_at INTEGER
+        last_played_at INTEGER,
+        loudness_lufs  REAL
     );
     CREATE INDEX IF NOT EXISTS idx_tracks_sha256 ON tracks(sha256);
     CREATE INDEX IF NOT EXISTS idx_tracks_artist ON tracks(artist);
@@ -98,6 +99,17 @@ const SCHEMA_SQL = `
     );
 `;
 db.exec(SCHEMA_SQL);
+
+// ---- Additive migrations ----
+// CREATE TABLE IF NOT EXISTS cannot add a column to an existing table, so new
+// columns are applied here. Idempotent: PRAGMA reports what is already there.
+function ensureColumn(table, column, definition) {
+    const cols = db.prepare(`PRAGMA table_info(${table})`).all().map((c) => c.name);
+    if (!cols.includes(column)) {
+        db.exec(`ALTER TABLE ${table} ADD COLUMN ${column} ${definition}`);
+    }
+}
+ensureColumn("tracks", "loudness_lufs", "REAL");
 
 // ---- Default settings for the library/foundation phase. ----
 // Only sets keys that don't yet exist so user values are never overwritten.

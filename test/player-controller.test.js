@@ -425,16 +425,23 @@ test("10. pause, resume, togglePause, setVolume, cycleLoop, and jumpTo delegate 
     await controller.togglePause();
     assert.equal(controller.paused, false);
 
-    // Set volume clamps 0..200
+    // Set volume clamps 0..200. The engine call is intentionally not awaited
+    // by the request path (a remote node costs ~250 ms per slider step), so
+    // wait for the coalesced apply instead.
+    const settleVolume = () => new Promise((r) => setTimeout(r, 120));
+
     await controller.setVolume(150);
-    assert.equal(controller.volume, 150);
-    assert.equal(mockEng.volume, 150);
+    assert.equal(controller.volume, 150, "the UI value updates immediately");
+    await settleVolume();
+    assert.equal(mockEng.volume, 150, "then reaches the engine");
 
     await controller.setVolume(300);
     assert.equal(controller.volume, 200);
 
     await controller.setVolume(-50);
     assert.equal(controller.volume, 0);
+    await settleVolume();
+    assert.equal(mockEng.volume, 0, "a drag settles on the final value");
 
     // Cycle loop: 0 -> 1 -> 2 -> 0
     controller.setLoop(0);

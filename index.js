@@ -49,6 +49,7 @@ const history = require("./modules/history");
 const recommendations = require("./modules/recommendations");
 const { createAutoplayService, normaliseKey } = require("./modules/autoplay");
 const PlayerController = require("./modules/player-controller");
+const { LoudnessService } = require("./modules/loudness");
 const { LavalinkEngine } = require("./modules/engines/lavalink");
 const { LocalEngine } = require("./modules/engines/local");
 const { joinVoiceChannel, getVoiceConnection, VoiceConnectionStatus } = require("@discordjs/voice");
@@ -150,7 +151,9 @@ auth.seedDefaultUser();
     }
 }
 
-function RuntimeSnapshot() { return runtimeMod.snapshot(); }
+function RuntimeSnapshot() {
+    return { ...runtimeMod.snapshot(), loudnessLeveling: loudness.enabled };
+}
 
 const client = discordMod.createClient();
 // Install the voice bridge BEFORE any voice connection is attempted: it
@@ -499,6 +502,10 @@ function broadcastNow() { stateMod.emitter.emit("change"); }
 
 // === Unified PlayerController (task 9) ===
 let playerController = null;
+// Per-track loudness levelling: one measurement per track, cached in SQLite.
+// Toggle lives in settings so it can be turned off without a code change.
+const loudness = new LoudnessService({ db: db.db, library, binaries });
+loudness.setEnabled(db.getSetting("loudness_leveling", "1") !== "0");
 try {
     playerController = new PlayerController({
         library,
@@ -529,6 +536,7 @@ try {
         // disconnect intentional so safety auto-rejoin doesn't interfere.
         onIntentionalDisconnect: (v) => { intentionalDisconnect = !!v; },
         isLavalinkReady: () => !!stateMod.State.connected,
+        loudness,
     });
     // The controller is the source of truth while it owns playback. Without
     // syncing here the WebSocket kept broadcasting a stale State (playing:null),
@@ -607,6 +615,7 @@ const ctx = {
         patch: stateMod.patch,
     }),
     State: stateMod.State,
+    loudness,
     library,
     downloads,
     uploads,

@@ -69,7 +69,8 @@ class PlayerController extends EventEmitter {
         getVoiceTarget,
         onIntentionalDisconnect,
         isLavalinkReady,
-        autoplayEnabled
+        autoplayEnabled,
+        loudness
     } = {}) {
         super();
         this.library = library || null;
@@ -81,6 +82,7 @@ class PlayerController extends EventEmitter {
         this.onIntentionalDisconnect = onIntentionalDisconnect || null;
         this.isLavalinkReady = isLavalinkReady || null;
         this.autoplayEnabled = autoplayEnabled !== false; // default: true
+        this.loudness = loudness || null;
         this._onTrackEndAutoplay = null; // returns one prepared track (pure)
         this._onAutoplayPrefetch = null; // fills the autoplay buffer in advance
 
@@ -191,6 +193,27 @@ class PlayerController extends EventEmitter {
                 );
             } catch {}
         }
+    }
+
+    /**
+     * Measure the current track's loudness in the background, then re-apply the
+     * volume so the levelling gain takes effect. Fire-and-forget: playback must
+     * never wait for (or fail because of) a measurement.
+     */
+    _measureLoudness(track) {
+        if (!this.loudness || !track || typeof this.loudness.measure !== "function") return;
+        if (this.loudness.enabled === false) return;
+        const item = this.queue[this.currentIndex];
+        Promise.resolve()
+            .then(() => this.loudness.measure(track))
+            .then((lufs) => {
+                if (lufs === null || lufs === undefined) return;
+                // Only re-apply if this is still the track that is playing.
+                if (this.queue[this.currentIndex] !== item) return;
+                this._scheduleVolumeApply();
+                this._emitState();
+            })
+            .catch(() => {});
     }
 
     _recordPlay(track) {
@@ -377,7 +400,7 @@ class PlayerController extends EventEmitter {
             await this._activateEngine(targetType);
 
             try {
-                await this.currentEngine.play(item.track, { volume: this.volume, startMs: 0 });
+                await this.currentEngine.play(item.track, { volume: this.effectiveVolume(), startMs: 0 });
             } catch (err) {
                 // A remote Lavalink node cannot reach /api/stream/:id and may
                 // also fail to resolve by URL. A downloaded file is still
@@ -386,7 +409,7 @@ class PlayerController extends EventEmitter {
                     && typeof this.createLocalEngine === "function") {
                     console.warn(`[player] Lavalink gagal: ${err.message} — fallback LocalEngine`);
                     await this._activateEngine("local");
-                    await this.currentEngine.play(item.track, { volume: this.volume, startMs: 0 });
+                    await this.currentEngine.play(item.track, { volume: this.effectiveVolume(), startMs: 0 });
                 } else {
                     throw err;
                 }
@@ -399,6 +422,11 @@ class PlayerController extends EventEmitter {
             this._recordPlay(item.track);
             // play() resolving is not proof of audio. Only position moving is.
             this._startStallWatchdog();
+
+            // Levelling: measure this track (once ever, cached in SQLite) and
+            // re-apply the volume once the real loudness is known. Runs after
+            // playback starts so a slow measurement never delays the audio.
+            this._measureLoudness(item.track);
             this._emitState();
 
             // Prepare similar candidates while this track plays, so an empty
@@ -627,11 +655,49 @@ class PlayerController extends EventEmitter {
         const num = Number(vol);
         const clamped = Math.max(0, Math.min(200, Number.isNaN(num) ? 100 : num));
         this.volume = clamped;
-        if (this.currentEngine && typeof this.currentEngine.setVolume === "function") {
-            await this.currentEngine.setVolume(clamped);
-        }
         this._emitState();
+
+        // Do NOT await the node here. One updatePlayer to a remote node costs a
+        // full HTTPS round-trip (~250 ms measured), and every slider step paid
+        // it: the user dragged, nothing happened, then the audio jumped. Apply
+        // in the background and let a newer value replace an older one still in
+        // flight, so a drag sends the latest value and nothing else.
+        this._scheduleVolumeApply();
         return { volume: this.volume };
+    }
+
+    /** Volume actually sent to the engine: user volume scaled by loudness levelling. */
+    effectiveVolume() {
+        const base = this.volume;
+        const factor = this.loudness ? this.loudness.factorFor(this.queue[this.currentIndex]?.track) : 1;
+        if (!Number.isFinite(factor) || factor <= 0) return base;
+        // Poru accepts 0..1000; our slider tops out at 200.
+        return Math.max(0, Math.min(1000, Math.round(base * factor)));
+    }
+
+    _scheduleVolumeApply() {
+        this._volumePending = true;
+        if (this._volumeTimer) return;
+        const run = async () => {
+            this._volumeTimer = null;
+            try {
+                while (this._volumePending) {
+                    this._volumePending = false;
+                    const target = this.effectiveVolume();
+                    if (process.env.DEBUG_VOLUME === "1") {
+                        console.log(`[volume] slider=${this.volume} -> engine=${target}`);
+                    }
+                    if (this.currentEngine && typeof this.currentEngine.setVolume === "function") {
+                        await this.currentEngine.setVolume(target);
+                    }
+                    // A value that arrived during the request is applied next.
+                }
+            } catch (err) {
+                console.warn("[volume] apply failed:", err?.message || err);
+            }
+        };
+        this._volumeTimer = setTimeout(run, 40);
+        if (typeof this._volumeTimer.unref === "function") this._volumeTimer.unref();
     }
 
     setLoop(mode) {

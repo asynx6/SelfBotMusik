@@ -54,6 +54,7 @@ function publicConfig(rt) {
         hasLavaPass: !!rt.lavaPass,
         lavaSecure: rt.lavaSecure,
         chatRequestsEnabled: Boolean(rt.chatRequestsEnabled),
+        loudnessLeveling: rt.loudnessLeveling !== false,
     };
 }
 

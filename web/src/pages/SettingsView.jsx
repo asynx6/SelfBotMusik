@@ -13,6 +13,7 @@ export default function SettingsView({ onNotification }) {
     lavaPass: "",
     lavaSecure: false,
     chatRequestsEnabled: false,
+    loudnessLeveling: true,
   });
 
   const [loading, setLoading] = useState(true);
@@ -40,6 +41,7 @@ export default function SettingsView({ onNotification }) {
         guildId: config.guildId,
         channelId: config.channelId,
         chatRequestsEnabled: config.chatRequestsEnabled,
+        loudnessLeveling: config.loudnessLeveling,
       });
       setConfig((prev) => ({ ...prev, ...(res.config || {}), lavaPass: "" }));
       onNotification?.("success", "Preferensi berhasil disimpan");
@@ -368,6 +370,22 @@ export default function SettingsView({ onNotification }) {
               <div style={{ fontWeight: 600 }}>Request Musik via Chat Discord</div>
               <div style={{ color: "var(--fg-secondary)", fontSize: 12 }}>
                 Pengguna di server Discord dapat me-mention bot untuk memutar lagu (contoh: <code>@bot what if i call</code>). Default dinonaktifkan.
+              </div>
+            </div>
+          </label>
+
+          <label style={{ display: "flex", alignItems: "flex-start", gap: 10, cursor: "pointer", fontSize: 13, marginTop: 14 }}>
+            <input
+              type="checkbox"
+              checked={config.loudnessLeveling}
+              onChange={(e) => setConfig({ ...config, loudnessLeveling: e.target.checked })}
+              style={{ width: 16, height: 16, marginTop: 2, accentColor: "var(--accent)" }}
+            />
+            <div>
+              <div style={{ fontWeight: 600 }}>Samakan Keras Suara Antar Lagu</div>
+              <div style={{ color: "var(--fg-secondary)", fontSize: 12 }}>
+                Tiap lagu diukur sekali (LUFS) lalu volume disesuaikan otomatis, jadi lagu yang rekamannya pelan tidak tenggelam di volume 20%.
+                Pengukuran jalan di belakang layar dan hasilnya disimpan.
               </div>
             </div>
           </label>

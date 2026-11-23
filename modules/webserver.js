@@ -824,7 +824,17 @@ function buildServer(ctx) {
 
     app.post("/api/settings", async (req, res) => {
         try {
-            const r = await ctx.applyRuntimeConfig(req.body || {});
+            const body = req.body || {};
+            // Loudness levelling is a playback preference, not part of the
+            // Lavalink/guild runtime — handle it here so saving it never cycles
+            // the node or stops playback.
+            if ("loudnessLeveling" in body && ctx.loudness) {
+                const on = body.loudnessLeveling !== false && body.loudnessLeveling !== 0
+                    && body.loudnessLeveling !== "0";
+                ctx.loudness.setEnabled(on);
+                db.setSetting("loudness_leveling", on ? "1" : "0");
+            }
+            const r = await ctx.applyRuntimeConfig(body);
             const rt = ctx.RuntimeSnapshot();
             res.json({ ok: true, changed: r.changed !== false, config: cfg.publicConfig(rt) });
         } catch (e) { res.status(400).json({ error: e.message }); }
