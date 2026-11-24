@@ -457,8 +457,14 @@ function syncStateFromPlayer() {
             loop: Number.isFinite(snap.loop) ? snap.loop : 0,
             position: Number.isFinite(snap.position) ? snap.position : 0,
             // Playback failures (e.g. a track with no usable engine) reach the
-            // dashboard here. `lastError` stays reserved for system errors.
+            // dashboard here. `playbackError` mirrors the controller's *current*
+            // error, which auto-clears on a successful play.
             playbackError: snap.lastError || null,
+            // ponytail: a stale system error (e.g. a transient nodeError from
+            // minutes ago) must not linger as a red banner while audio is fine.
+            // Clear it once playback is healthy; real runtime errors re-assert
+            // it on the next patch from runtime.js / discord.js / poru-manager.
+            ...(snap.playing && !snap.lastError ? { lastError: null } : {}),
         });
         return;
     }
@@ -599,8 +605,8 @@ const ctx = {
     stopAll,
     togglePause: () => playerMod.togglePause(poru, runtimeMod.Runtime),
     setVolume: (v) => playerMod.setVolume(poru, runtimeMod.Runtime, v),
-    cycleLoop: () => playerMod.cycleLoop(poru, runtimeMod.Runtime),
-    setLoop: (m) => playerMod.setLoop(poru, runtimeMod.Runtime, m),
+    cycleLoop: () => playerMod.cycleLoop(),
+    setLoop: (m) => playerMod.setLoop(m),
     removeAt: (i) => playerMod.removeAt(poru, runtimeMod.Runtime, i),
     clearQueue: () => playerMod.clearQueue(poru, runtimeMod.Runtime),
     applyRuntimeConfig: (p) => runtimeMod.applyRuntimeConfig(p, {

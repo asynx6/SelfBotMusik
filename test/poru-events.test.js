@@ -31,12 +31,12 @@ test("nodeDisconnect clears the connected flag", () => {
     assert.equal(patches.at(-1).connected, false);
 });
 
-test("nodeError clears the connected flag so the indicator cannot go stale", () => {
+test("nodeError records the message but does NOT flap the connected flag", () => {
     const { poru, patches, node } = harness();
     poru.emit("nodeConnect", node);
     poru.emit("nodeError", node, new Error("ECONNREFUSED 127.0.0.1:2333"));
 
     const last = patches.at(-1);
-    assert.equal(last.connected, false, "a node error must mark Lavalink as offline");
+    assert.equal(last.connected, undefined, "a transient error must not mark Lavalink offline — only nodeDisconnect does");
     assert.match(last.lastError, /ECONNREFUSED/);
 });

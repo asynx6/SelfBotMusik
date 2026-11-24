@@ -42,11 +42,13 @@ function wirePoruEvents(poru, patch) {
     poru.on("nodeError", (node, err) => {
         const msg = err?.message || String(err || "");
         console.error(`❌ Node [${node.name}] error: ${msg.slice(0, 240)}`);
-        // A node that errored is not usable. Clear the cached flag as well:
-        // Poru emits nodeError without a matching nodeDisconnect for some WS
-        // failures, which would leave the dashboard showing "connected" and
-        // the engine picker sending tracks to a dead node.
-        try { patch({ connected: false, lastError: msg.slice(0, 240) }); } catch {}
+        // ponytail: a transient nodeError does NOT mean Lavalink is down.
+        // Previously this flipped `connected:false` even while the node's WS
+        // stayed alive, so the dashboard's "Lavalink ready" light flickered on
+        // and off. The single source of truth is the node's own connection
+        // flag; `nodeDisconnect` handles the real down transition. Keep the
+        // message for diagnostics only, never as a readiness signal.
+        try { patch({ lastError: msg.slice(0, 240) }); } catch {}
     });
 }
 

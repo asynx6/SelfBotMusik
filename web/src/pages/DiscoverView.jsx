@@ -28,9 +28,9 @@ export default function DiscoverView({ onNotification }) {
 
   const handlePlayNow = async (track) => {
     try {
-      // Search results are already persisted as library rows, so play that
-      // exact track instead of searching again by title.
-      await api.playNow([track.id]);
+      // Search no longer persists rows. Playing is the first act that stores
+      // the song in the library (via /api/queue/from-search).
+      await api.playSearchTrack(track, "play");
       onNotification?.("success", `Memutar: ${track.title}`);
     } catch (err) {
       onNotification?.("error", err.message);
@@ -39,7 +39,7 @@ export default function DiscoverView({ onNotification }) {
 
   const handleAddToQueue = async (track) => {
     try {
-      await api.addToQueue([track.id]);
+      await api.playSearchTrack(track, "queue");
       onNotification?.("success", `Ditambahkan ke antrian: ${track.title}`);
     } catch (err) {
       onNotification?.("error", err.message);
@@ -50,11 +50,12 @@ export default function DiscoverView({ onNotification }) {
     if (!results.length) return;
     setAddingAll(true);
     try {
-      // One request for the whole result set: the controller appends the batch
-      // in one go instead of one round trip per song.
-      const ids = results.map((t) => t.id).filter((id) => Number.isInteger(id));
-      const res = await api.addToQueue(ids);
-      onNotification?.("success", `${res.count ?? ids.length} lagu ditambahkan ke antrian`);
+      let count = 0;
+      for (const t of results) {
+        await api.playSearchTrack(t, "queue");
+        count++;
+      }
+      onNotification?.("success", `${count} lagu ditambahkan ke antrian`);
     } catch (err) {
       onNotification?.("error", err.message);
     } finally {

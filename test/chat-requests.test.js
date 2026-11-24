@@ -97,7 +97,7 @@ test("searchTracksAuto: retries once after a transient node disconnect", async (
     assert.equal(poru._calls.length, 1);
 });
 
-test("searchTracks: dashboard search asks for every candidate with opts.all", async () => {
+test("searchTracks: text search returns only the best match, even with opts.all", async () => {
     const candidates = [
         { info: { identifier: "c1", title: "Sporty One", sourceName: "youtube" } },
         { info: { identifier: "c2", title: "Sporty Two", sourceName: "youtube" } },
@@ -114,6 +114,13 @@ test("searchTracks: dashboard search asks for every candidate with opts.all", as
         makeMockPoru([{ loadType: "search", tracks: candidates }]),
         "sporty", "req", { all: true }
     );
-    assert.equal(all.length, 3, "opts.all returns the whole candidate list");
-    assert.equal(all[2].info.title, "Sporty Three");
+    assert.equal(all.length, 1, "text search must stay a single best match");
+    assert.equal(all[0].info.title, "Sporty One");
+
+    // `all` still expands an explicit PLAYLIST loadType to its full track list.
+    const pl = await searchTracks(
+        makeMockPoru([{ loadType: "playlist", tracks: candidates, playlist: { name: "Mix" } }]),
+        "https://yt playlist", "req", { all: true }
+    );
+    assert.equal(pl.length, 3, "opts.all expands a playlist to all its tracks");
 });

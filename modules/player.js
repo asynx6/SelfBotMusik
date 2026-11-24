@@ -2,32 +2,26 @@
 
 const stateMod = require("./state");
 
-// Loop constants
+// The PlayerController is the ONLY loop owner. These adapters remain as a
+// compatibility fallback, but they must never call Poru's `player.setLoop()`:
+// that starts a second internal scheduler which fights the controller's queue
+// and replays tracks (the "loop QUEUE still broken" symptom).
 const LOOP_LABELS = ["OFF", "TRACK", "QUEUE"];
-const LOOP_PORTU = ["NONE", "TRACK", "QUEUE"];
 
 function getLoop() { return stateMod.State.loop || 0; }
 
-async function cycleLoop(poru, Runtime) {
+async function cycleLoop() {
     const next = (getLoop() + 1) % 3;
     stateMod.patch({ loop: next });
-    const p = getPlayer(poru, Runtime);
-    if (p) {
-        try { p.setLoop(LOOP_PORTU[next]); } catch {}
-    }
     return { mode: next, label: LOOP_LABELS[next] };
 }
 
-async function setLoop(poru, Runtime, mode) {
+async function setLoop(mode) {
     const idx = Number(mode);
     if (!Number.isInteger(idx) || idx < 0 || idx > 2) {
         throw new Error("Invalid loop mode (0..2)");
     }
     stateMod.patch({ loop: idx });
-    const p = getPlayer(poru, Runtime);
-    if (p) {
-        try { p.setLoop(LOOP_PORTU[idx]); } catch {}
-    }
     return { mode: idx, label: LOOP_LABELS[idx] };
 }
 
@@ -91,11 +85,12 @@ async function _searchTracks(poru, query, requester, opts = {}) {
         throw new Error("No results");
     }
     if (res.loadType === "track") return [res.tracks[0]];
-    // A text query resolves to N candidates. Chat requests and `enqueue` only
-    // want the best match (queueing ten near-duplicates of "Silence" is wrong),
-    // so the full list is opt-in for the dashboard's search page.
-    if (res.loadType === "search") return opts.all ? res.tracks : [res.tracks[0]];
-    if (res.loadType === "playlist") return res.tracks;
+    // A text query resolves to N candidates. The dashboard user picks ONE —
+    // returning a wall of near-duplicates is wrong. Keep `all` as an explicit
+    // opt-in only for callers that truly want a playlist's full track list;
+    // plain `search` responses are always trimmed to the best match.
+    if (res.loadType === "search") return [res.tracks[0]];
+    if (res.loadType === "playlist") return opts.all ? res.tracks : [res.tracks[0]];
     return [];
 }
 

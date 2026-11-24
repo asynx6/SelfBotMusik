@@ -522,13 +522,33 @@ function buildServer(ctx) {
             const requester = req.body?.requester || "Web";
             const infos = await searchTracksFn(query, requester, { all: true });
             if (!infos || !infos.length) return res.status(404).json({ error: "No results" });
-            const out = infos.map((info) => {
-                const row = lib.upsertFromLavalink(info);
-                const t = serializeApiTrack(row);
-                t.downloading = dl.isDownloading(row.id);
-                return t;
-            });
-            res.json(out);
+
+            // ponytail: the dashboard shows only the single best match (the
+            // user picks one, not a wall of near-duplicates). More important:
+            // searching must NOT write into `tracks`. A song enters the library
+            // only when it is played/queued — see /api/queue/add|play-now, which
+            // upsert the real library row. Serialise the raw Poru track here so
+            // search stays a pure read.
+            const best = infos[0];
+            const info = best.info || best;
+            const t = {
+                id: null,
+                title: info.title || "Unknown",
+                author: info.author || info.artist || "Unknown",
+                duration: info.length ?? info.duration_ms ?? info.duration ?? 0,
+                uri: info.uri || "",
+                thumbnail: info.artworkUrl
+                    || (info.identifier ? `https://i.ytimg.com/vi/${info.identifier}/hqdefault.jpg` : "")
+                    || "",
+                downloaded: false,
+                downloading: false,
+                // Opaque handle so play/queue can resolve the exact track
+                // without re-searching. encode() is Poru's serialised track.
+                encoded: best.track || best.encoded || null,
+                sourceName: info.sourceName || null,
+                identifier: info.identifier || null,
+            };
+            res.json([t]);
         } catch (e) {
             console.error("api/search:", e.message);
             res.status(400).json({ error: e.message });
@@ -621,6 +641,48 @@ function buildServer(ctx) {
             dl.cancel(Number(req.params.id));
             res.json({ ok: true });
         } catch (e) { res.status(400).json({ error: e.message }); }
+    });
+
+    // Play/queue a track that came from /api/search. Search itself is a pure
+    // read and returns no library id — the row is created HERE, at the moment
+    // the user actually plays or queues the song. This is the single path that
+    // turns a search result into a library entry.
+    app.post("/api/queue/from-search", async (req, res) => {
+        try {
+            const t = req.body?.track;
+            if (!t || typeof t !== "object") {
+                return res.status(400).json({ error: "track object required" });
+            }
+            const info = {
+                title: t.title || "Unknown",
+                author: t.author || t.artist || "Unknown",
+                length: t.duration || t.duration_ms || 0,
+                uri: t.uri || "",
+                artworkUrl: t.thumbnail || "",
+                identifier: t.identifier || "",
+                sourceName: t.sourceName || "youtube",
+            };
+            if (!info.identifier && info.uri) {
+                try { info.identifier = new URL(info.uri).searchParams.get("v") || ""; } catch {}
+            }
+            if (!info.identifier) return res.status(400).json({ error: "track has no identifier" });
+
+            const row = lib.upsertFromLavalink(info);
+            // Carry the encoded blob from search so the engine can play the
+            // exact track without a second network resolve.
+            if (t.encoded) row.encoded = t.encoded;
+            const requester = req.body?.requester || "Web";
+            const action = req.body?.action === "queue" ? "queue" : "play";
+
+            if (!pc) return res.status(503).json({ error: "Player controller not available" });
+            const r = action === "queue"
+                ? await pc.enqueue([row], requester)
+                : await pc.playNow([row], requester);
+            res.json({ ok: true, trackId: row.id, action, ...(r || {}) });
+        } catch (e) {
+            console.error("api/queue/from-search:", e.message);
+            res.status(400).json({ error: e.message });
+        }
     });
 
     app.post("/api/queue/add", async (req, res) => {

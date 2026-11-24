@@ -67,6 +67,8 @@ export const api = {
   deleteTrackFile: (id) => apiFetch(`/api/library/tracks/${id}/file`, { method: "DELETE" }),
   deleteTrack: (id) => apiFetch(`/api/library/tracks/${id}`, { method: "DELETE" }),
   addToQueue: (trackIds) => apiFetch("/api/queue/add", { method: "POST", body: JSON.stringify({ trackIds }) }),
+  playSearchTrack: (track, action = "play") =>
+    apiFetch("/api/queue/from-search", { method: "POST", body: JSON.stringify({ track, action }) }),
 
   // Downloads
   enqueueDownload: (trackIds) => apiFetch("/api/downloads", { method: "POST", body: JSON.stringify({ trackIds }) }),

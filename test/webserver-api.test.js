@@ -159,38 +159,45 @@ function seedLavalinkTrack(identifier, title, extra = {}) {
     });
 }
 
-test("POST /api/search upserts tracks and returns downloaded/downloading flags", async () => {
+test("POST /api/search returns ONE best match and never persists a library row", async () => {
     searchResults = [
-        { sourceName: "youtube", identifier: "vid1", title: "Search Hit One", author: "A", length: 90000, uri: "u1" },
-        { sourceName: "youtube", identifier: "vid2", title: "Search Hit Two", author: "B", length: 80000, uri: "u2" },
+        { track: "enc-vid1", info: { sourceName: "youtube", identifier: "vid1", title: "Search Hit One", author: "A", length: 90000, uri: "u1" } },
+        { track: "enc-vid2", info: { sourceName: "youtube", identifier: "vid2", title: "Search Hit Two", author: "B", length: 80000, uri: "u2" } },
     ];
     const res = await request("POST", "/api/search", { query: "search hits" });
     assert.equal(res.status, 200);
-    assert.equal(res.json.length, 2);
-    for (const t of res.json) {
-        assert.ok(t.id > 0);
-        assert.equal(typeof t.downloaded, "boolean");
-        assert.equal(typeof t.downloading, "boolean");
-        assert.ok(t.title);
-        assert.ok(t.duration);
-        assert.ok(t.uri);
-    }
-    assert.equal(res.json[0].title, "Search Hit One");
-    // Rows actually persisted
-    assert.ok(library.findBySourceKey("youtube:vid1"));
-    assert.ok(library.findBySourceKey("youtube:vid2"));
+    assert.equal(res.json.length, 1, "only the best match is shown");
+    const t = res.json[0];
+    assert.equal(t.title, "Search Hit One");
+    assert.equal(t.id, null, "search must not hand out a library id");
+    assert.equal(typeof t.downloaded, "boolean");
+    assert.equal(typeof t.downloading, "boolean");
+    assert.ok(t.duration);
+    assert.ok(t.uri);
+    assert.ok(t.encoded);
+    // The core fix: searching is a pure read — no rows created.
+    assert.equal(library.findBySourceKey("youtube:vid1"), undefined);
+    assert.equal(library.findBySourceKey("youtube:vid2"), undefined);
+});
 
-    // downloading flag reflects downloads service
-    downloads.rows.push({ id: 99, track_id: res.json[0].id, status: "running", progress: 0.5 });
-    const res2 = await request("POST", "/api/search", { query: "search hits" });
-    const first = res2.json.find((t) => t.title === "Search Hit One");
-    assert.equal(first.downloading, true);
-    downloads.rows.length = 0;
+test("POST /api/queue/from-search persists the track only when played", async () => {
+    const track = {
+        title: "Queued Hit", author: "C", duration: 70000, uri: "https://youtube.com/watch?v=vid99",
+        identifier: "vid99", sourceName: "youtube", thumbnail: "", encoded: "enc99",
+    };
+    assert.equal(library.findBySourceKey("youtube:vid99"), undefined);
+    const res = await request("POST", "/api/queue/from-search", { track, action: "queue" });
+    assert.equal(res.status, 200);
+    assert.equal(res.json.ok, true);
+    const row = library.findBySourceKey("youtube:vid99");
+    assert.ok(row, "the row exists once the track is actually queued");
+    assert.equal(res.json.trackId, row.id);
 });
 
 test("GET /api/library/tracks supports filtering and pagination", async () => {
-    const t1 = library.findBySourceKey("youtube:vid1");
-    const t2 = library.findBySourceKey("youtube:vid2");
+    // Seed explicitly — search no longer seeds rows as a side effect.
+    const t1 = seedLavalinkTrack("vid1", "Search Hit One");
+    const t2 = seedLavalinkTrack("vid2", "Search Hit Two");
 
     // Make t1 local by attaching a file
     const fileName = `${t1.id}.mp3`;
