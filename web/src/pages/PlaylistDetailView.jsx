@@ -3,6 +3,7 @@ import { Play, Plus, Trash2, Heart, Music2, Share2, Layers } from "lucide-react"
 import { api } from "../services/api";
 import TrackArt from "../components/TrackArt";
 import DownloadButton from "../components/DownloadButton";
+import AddToPlaylistButton from "../components/AddToPlaylistButton";
 
 function formatDuration(ms) {
   if (!ms) return "0:00";
@@ -160,6 +161,11 @@ export default function PlaylistDetailView({ playlistId, onNotification, onDelet
             </div>
 
             <div style={{ display: "flex", alignItems: "center", gap: 6 }}>
+              <AddToPlaylistButton
+                trackId={t.id}
+                onNotification={onNotification}
+                compact
+              />
               <DownloadButton
                 trackId={t.id}
                 downloaded={!!t.file_path}

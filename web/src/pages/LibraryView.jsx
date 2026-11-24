@@ -4,6 +4,7 @@ import { api } from "../services/api";
 import { useDialog } from "../context/DialogContext";
 import TrackArt from "../components/TrackArt";
 import DownloadButton from "../components/DownloadButton";
+import AddToPlaylistButton from "../components/AddToPlaylistButton";
 import { useIsMobile } from "../hooks/useMediaQuery";
 
 function formatDuration(ms) {
@@ -326,6 +327,12 @@ export default function LibraryView({ onNotification }) {
                 <Play size={14} fill="#fff" />
                 <span>Putar</span>
               </button>
+
+              <AddToPlaylistButton
+                trackId={t.id}
+                onNotification={onNotification}
+                compact
+              />
 
               <DownloadButton
                 trackId={t.id}

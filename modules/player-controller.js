@@ -363,6 +363,24 @@ class PlayerController extends EventEmitter {
      * moment nothing needs to look back at earlier entries — `next()` resolves
      * its autoplay seed before calling into `playCurrent()`.
      */
+    /**
+     * Move the currently playing entry to the tail of the queue and keep the
+     * index pointing at whatever is now in its place. Used by QUEUE loop so a
+     * finished track reappears at the bottom of the dashboard list instead of
+     * disappearing when `getSnapshot()` slices from `currentIndex`.
+     */
+    _rotateCurrentToEnd() {
+        if (this.queue.length === 0) return;
+        const idx = (this.currentIndex >= 0 && this.currentIndex < this.queue.length)
+            ? this.currentIndex
+            : 0;
+        const [item] = this.queue.splice(idx, 1);
+        this.queue.push(item);
+        // Everything after `idx` shifted one slot left; the next track now
+        // occupies the slot the rotated item used to fill.
+        this.currentIndex = (idx >= this.queue.length - 1) ? 0 : idx;
+    }
+
     _compactQueue() {
         if (this.currentIndex < QUEUE_COMPACT_THRESHOLD) return 0;
         if (this.currentIndex >= this.queue.length) return 0;
@@ -482,7 +500,12 @@ class PlayerController extends EventEmitter {
         }
 
         if (this.loop === LOOP_MODES.QUEUE) {
-            this.currentIndex = (this.currentIndex + 1) % this.queue.length;
+            // ponytail: QUEUE loop is a ring, not an index wrap. The finished
+            // item moves to the tail so the dashboard queue keeps showing every
+            // track instead of silently dropping the ones already played.
+            // Upgrade path: keep a `playedAt` stamp and sort by it if users ever
+            // need the exact original order back.
+            this._rotateCurrentToEnd();
             await this.playCurrent();
             return;
         }

@@ -3,6 +3,7 @@ import { Search, Play, Plus, Loader2 } from "lucide-react";
 import { api } from "../services/api";
 import TrackArt from "../components/TrackArt";
 import DownloadButton from "../components/DownloadButton";
+import AddToPlaylistButton from "../components/AddToPlaylistButton";
 
 export default function DiscoverView({ onNotification }) {
   const [query, setQuery] = useState("");
@@ -153,6 +154,12 @@ export default function DiscoverView({ onNotification }) {
                 </div>
 
                 <div style={{ display: "flex", alignItems: "center", gap: 8 }}>
+                  <AddToPlaylistButton
+                    trackId={track.id}
+                    onNotification={onNotification}
+                    compact
+                  />
+
                   <DownloadButton
                     trackId={track.id}
                     downloaded={!!track.downloaded}

@@ -4,6 +4,7 @@ import { usePlayer } from "../context/PlayerContext";
 import { api } from "../services/api";
 import TrackArt from "../components/TrackArt";
 import DownloadButton from "../components/DownloadButton";
+import AddToPlaylistButton from "../components/AddToPlaylistButton";
 
 function formatDuration(ms) {
   if (!ms) return "0:00";
@@ -149,6 +150,13 @@ export default function QueueView({ onNotification }) {
               </div>
 
               <div style={{ display: "flex", alignItems: "center", gap: 6 }}>
+                {Number.isInteger(item.id) && (
+                  <AddToPlaylistButton
+                    trackId={item.id}
+                    onNotification={onNotification}
+                    compact
+                  />
+                )}
                 {Number.isInteger(item.id) && (
                   <DownloadButton
                     trackId={item.id}

@@ -3,6 +3,7 @@ import { History as HistoryIcon, Play, Clock } from "lucide-react";
 import { api } from "../services/api";
 import TrackArt from "../components/TrackArt";
 import DownloadButton from "../components/DownloadButton";
+import AddToPlaylistButton from "../components/AddToPlaylistButton";
 
 function formatDuration(ms) {
   if (!ms) return "0:00";
@@ -83,6 +84,11 @@ export default function HistoryView({ onNotification }) {
             </div>
 
             <div style={{ display: "flex", alignItems: "center", gap: 6 }}>
+              <AddToPlaylistButton
+                trackId={item.id}
+                onNotification={onNotification}
+                compact
+              />
               <DownloadButton
                 trackId={item.id}
                 downloaded={!!item.file_path}
