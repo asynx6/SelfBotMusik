@@ -26,7 +26,7 @@ function formatTime(ms) {
 }
 
 const VOLUME_MIN = 0;
-const VOLUME_MAX = 200;
+const VOLUME_MAX = 100;
 
 function clampVolume(value) {
   if (value === null || value === undefined || value === "") return 100;

@@ -22,10 +22,10 @@ test("parseLoudness reads the integrated value from an ebur128 summary", () => {
     assert.equal(parseLoudness(""), null);
 });
 
-test("gainForLufs brings a track to the target and clamps runaway values", () => {
+test("gainForLufs brings a track to the target and clamps both directions", () => {
     assert.equal(gainForLufs(TARGET_LUFS), 0, "a track already at target needs no gain");
-    assert.ok(gainForLufs(-20) > 0, "quiet track must be boosted");
-    assert.ok(gainForLufs(-9) < 0, "hot master must be attenuated");
+    assert.equal(gainForLufs(-20), 6, "quiet track is lifted toward the target");
+    assert.equal(gainForLufs(-9), -5, "hot master is turned down toward the target");
     assert.equal(gainForLufs(-60), 12, "boost is clamped");
     assert.equal(gainForLufs(0), -12, "attenuation is clamped");
     assert.equal(gainForLufs(null), 0);
@@ -94,12 +94,12 @@ test("measure() caches the result and does not re-run for the same track", async
     assert.equal(spawned, 2, "only the first call spawned the pipeline");
 });
 
-test("factorFor boosts quiet tracks and attenuates loud ones", async () => {
+test("factorFor lifts quiet tracks and attenuates loud ones", async () => {
     const { svc } = makeService(() => fakeChild({ stderr: "I: -20.0 LUFS" }));
 
     svc.getCached = () => -20;
     const quiet = svc.factorFor({ id: 1 });
-    assert.ok(quiet > 1, "quiet track is boosted");
+    assert.ok(quiet > 1, "quiet track is lifted toward the target");
 
     svc.getCached = () => -8;
     const loud = svc.factorFor({ id: 2 });

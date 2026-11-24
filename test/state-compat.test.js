@@ -39,7 +39,7 @@ test("state.snapshot() matches legacy schema by default", () => {
     const snap = stateMod.snapshot();
     assertSchema(snap, "default");
     assert.ok(Array.isArray(snap.queue));
-    assert.ok(snap.volume >= 0 && snap.volume <= 200);
+    assert.ok(snap.volume >= 0 && snap.volume <= 100);
     assert.ok(snap.loop >= 0 && snap.loop <= 2);
 });
 
@@ -96,13 +96,13 @@ test("controller snapshot patched into State keeps legacy schema", async () => {
 
     // Pause and volume flow through the same path.
     await pc.pause();
-    await pc.setVolume(150);
+    await pc.setVolume(100);
     pc.setLoop(2);
     syncFromController(pc);
     const snap2 = stateMod.snapshot();
     assertSchema(snap2, "paused+volume");
     assert.equal(snap2.paused, true);
-    assert.equal(snap2.volume, 150);
+    assert.equal(snap2.volume, 100);
     assert.equal(snap2.loop, 2);
 
     // Stop resets to empty-queue shape without breaking schema.

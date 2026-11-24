@@ -19,7 +19,13 @@ const path = require("path");
 
 const TARGET_LUFS = -14;
 const MEASURE_SECONDS = 45;
+// Lavalink's `volume` is a plain linear multiplier with no limiter: anything
+// above 100 is digital gain and clips, which is what "suara jelek, ga jernih"
+// was. Gain itself is normal (quiet tracks need it), so the ceiling is
+// enforced where the final value is computed: `effectiveVolume()` clamps the
+// product to 100. Boost and cut are symmetric here.
 const MAX_GAIN_DB = 12;
+const MAX_CUT_DB = 12;
 const MEASURE_TIMEOUT_MS = 25000;
 
 function parseLoudness(stderr) {
@@ -31,13 +37,17 @@ function parseLoudness(stderr) {
 }
 
 /**
- * Gain in dB that brings `lufs` to the target, clamped so a quiet recording is
- * never boosted into clipping-range and a hot master is never silenced.
+ * Gain in dB that brings `lufs` to the target, clamped to +/-12 dB.
+ *
+ * Positive gain is allowed here because it is what makes quiet tracks match
+ * loud ones; the caller guarantees the *result* never exceeds unity volume, so
+ * the gain is only ever spent from the user's headroom (a slider at 100 leaves
+ * none, a slider at 60 leaves 40%).
  */
 function gainForLufs(lufs, target = TARGET_LUFS) {
     if (!Number.isFinite(lufs)) return 0;
     const gain = target - lufs;
-    return Math.max(-MAX_GAIN_DB, Math.min(MAX_GAIN_DB, gain));
+    return Math.max(-MAX_CUT_DB, Math.min(MAX_GAIN_DB, gain));
 }
 
 function dbToFactor(db) {

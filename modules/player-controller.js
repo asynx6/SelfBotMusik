@@ -20,6 +20,9 @@ const LOOP_MODES = {
  * second — GC churn that never settles and RSS that keeps climbing.
  */
 const QUEUE_COMPACT_THRESHOLD = 64;
+// 100 = full scale. Lavalink's volume is a linear multiplier with no limiter,
+// so sending more than this clips the samples.
+const UNITY_VOLUME = 100;
 
 function serializeTrack(item, isCurrent = false) {
     if (!item) return null;
@@ -196,23 +199,20 @@ class PlayerController extends EventEmitter {
     }
 
     /**
-     * Measure the current track's loudness in the background, then re-apply the
-     * volume so the levelling gain takes effect. Fire-and-forget: playback must
-     * never wait for (or fail because of) a measurement.
+     * Measure the current track's loudness in the background so the NEXT
+     * playback of it is levelled.
+     *
+     * Deliberately does NOT re-apply the volume: nudging the gain while the
+     * track is already playing is audible as "suara tiba-tiba besar lalu
+     * kecil". The cached LUFS feeds `effectiveVolume()` on the next play.
      */
     _measureLoudness(track) {
         if (!this.loudness || !track || typeof this.loudness.measure !== "function") return;
         if (this.loudness.enabled === false) return;
-        const item = this.queue[this.currentIndex];
+        if (this.loudness.getCached?.(track) !== null) return; // already known
         Promise.resolve()
             .then(() => this.loudness.measure(track))
-            .then((lufs) => {
-                if (lufs === null || lufs === undefined) return;
-                // Only re-apply if this is still the track that is playing.
-                if (this.queue[this.currentIndex] !== item) return;
-                this._scheduleVolumeApply();
-                this._emitState();
-            })
+            .then(() => { /* cached only; never touch the live volume */ })
             .catch(() => {});
     }
 
@@ -676,7 +676,10 @@ class PlayerController extends EventEmitter {
 
     async setVolume(vol) {
         const num = Number(vol);
-        const clamped = Math.max(0, Math.min(200, Number.isNaN(num) ? 100 : num));
+        // Cap at 100: Lavalink's volume is a linear multiplier, so anything
+        // above 100 is unclipped digital gain and sounds distorted. Older
+        // clients could still post 200, so the ceiling lives here too.
+        const clamped = Math.max(0, Math.min(100, Number.isNaN(num) ? 100 : num));
         this.volume = clamped;
         this._emitState();
 
@@ -689,13 +692,23 @@ class PlayerController extends EventEmitter {
         return { volume: this.volume };
     }
 
-    /** Volume actually sent to the engine: user volume scaled by loudness levelling. */
+    /**
+     * Volume actually sent to the engine: user volume scaled by loudness
+     * levelling, hard-capped at unity.
+     *
+     * The cap is the whole trick. Lavalink multiplies samples by this number
+     * with no limiter, so >100 clips and sounds harsh/buzzy. Levelling is
+     * therefore allowed to boost a quiet track only as far as the slider has
+     * headroom: at volume 100 there is none (level-matched, no clipping), at
+     * volume 60 the boost can use the missing 40%. Loud tracks are always
+     * turned down, so the result is consistent loudness without distortion.
+     */
     effectiveVolume() {
         const base = this.volume;
         const factor = this.loudness ? this.loudness.factorFor(this.queue[this.currentIndex]?.track) : 1;
         if (!Number.isFinite(factor) || factor <= 0) return base;
-        // Poru accepts 0..1000; our slider tops out at 200.
-        return Math.max(0, Math.min(1000, Math.round(base * factor)));
+        const target = Math.round(base * factor);
+        return Math.max(0, Math.min(UNITY_VOLUME, target));
     }
 
     _scheduleVolumeApply() {
