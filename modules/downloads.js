@@ -302,6 +302,9 @@ function createDownloadManager({
                     id: queuedRow.id,
                     trackId: queuedRow.track_id,
                     uri: track.uri,
+                    title: track.title || "",
+                    artist: track.artist || track.author || "",
+                    sourceName: track.source_name || "",
                     proc: null,
                     canceled: false,
                     attempt: 0,
@@ -330,7 +333,19 @@ function createDownloadManager({
             dbValue: getSetting("ytdlp_path", "yt-dlp"),
         });
         const outTemplate = path.join(tmpDir, `${task.id}.%(ext)s`);
-        const args = ["-f", "bestaudio/best", "--no-playlist", "--no-part", "-o", outTemplate, task.uri];
+        // yt-dlp can only fetch DRM-free sources (YouTube, SoundCloud, …).
+        // A Spotify/Apple/Deezer row stores a *metadata* URL — handing that to
+        // yt-dlp fails with `ERROR: [DRM] The requested site is known to use
+        // DRM protection`. Those rows carry no direct media URL, so download
+        // the same track from YouTube via a search query instead.
+        const args = ["-f", "bestaudio/best", "--no-playlist", "--no-part", "-o", outTemplate];
+        const drmOnly = /^(spotify|apple|apple_music|deezer|tidal|amazonmusic)$/i.test(task.sourceName || "");
+        if (drmOnly && task.title) {
+            const q = [task.title, task.artist].filter(Boolean).join(" ");
+            args.push("ytsearch1:" + q);
+        } else {
+            args.push(task.uri);
+        }
 
         let failureHandled = false;
 

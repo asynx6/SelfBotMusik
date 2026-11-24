@@ -173,6 +173,15 @@ async function ensurePoru() {
         e.code = "MISSING_LAVALINK_CONFIG";
         throw e;
     }
+    if (process.env.SBM_TRACE_WS && poruDirty) {
+        console.warn("   ensurePoru: rebuilding node (poruDirty). caller:\n"
+            + (new Error().stack || "").split("\n").slice(2, 7).join("\n"));
+    }
+    // Fast path: a healthy node that already points at the current settings is
+    // reused as-is. Rebuilding it on every call tore the WebSocket down and
+    // re-created it (the "online/depleted flicker" + duplicated 1006 closes).
+    const existing = poru.nodes.get("main");
+    if (!poruDirty && existing && existing.isConnected) return;
     if (poruDirty) poruInitPromise = null;
     if (!poruInitPromise) {
         poruInitPromise = (async () => {
@@ -191,6 +200,13 @@ async function ensurePoru() {
                 port: rt.lavaPort,
                 password: rt.lavaPass,
                 secure: rt.lavaSecure,
+                // The public node drops idle sockets (Cloudflare 524 / 1006).
+                // Without a resume key every drop destroys the players and the
+                // dashboard light blinks offline. Resuming keeps session state
+                // across a reconnect, so a 3-second blip is invisible.
+                resumeKey: "sbm-main",
+                resumeTimeout: 120,
+                autoResume: true,
             });
             poruDirty = false;
         })();
@@ -664,15 +680,17 @@ poru.on("trackEnd", (player, track, data) => {
     syncStateFromPlayer();
     broadcastNow();
 });
+// Stuck / error handling lives in the PlayerController (it owns the queue and
+// knows the loop mode). Calling `player.skip()` here as well created a second
+// advance path: Poru's queue was empty, so the skip re-triggered play and the
+// same track ended up "replaced" over and over.
 poru.on("trackStuck", (player, track, thresholdMs) => {
     if (player.guildId !== runtimeMod.Runtime.guildId) return;
     console.warn(`⚠️  Stuck: ${track?.info?.title || "?"} (${thresholdMs}ms)`);
-    player.skip().catch(() => {});
 });
 poru.on("trackError", (player, track, data) => {
     if (player.guildId !== runtimeMod.Runtime.guildId) return;
     console.error(`❌ Track exception:`, data?.exception?.message || data);
-    player.skip().catch(() => {});
 });
 
 discordMod.wireSafetyEvents(client, {
