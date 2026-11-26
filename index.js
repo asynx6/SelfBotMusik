@@ -769,15 +769,25 @@ setInterval(() => stateMod.tick(() => ({ position: currentPositionMs() })), 500)
 
 // Periodic heap hygiene. V8 only collects when it feels pressure, so with a
 // 512 MB cap it happily let 400 MB of collectable garbage pile up over a day
-// (measured: heap 52 MB → 394 MB while the live set stayed at 7 MB). The
-// process must survive a year without a restart, so force a collection on a
-// quiet interval — skipped while a track is playing to keep audio glitch-free.
+// (measured: heap 52 MB → 394 MB while the live set stayed at 7 MB). The bot
+// must survive a year without a restart, so collect on a timer once the heap
+// crosses a threshold.
+//
+// The earlier version skipped collection while a track was playing, which on a
+// 24/7 music bot means it never ran (measured: 55 MB → 114 MB in 3.8 h). Audio
+// is streamed by the REMOTE Lavalink node, so a GC pause in this process only
+// delays control messages for a few milliseconds — it cannot glitch playback.
 if (typeof global.gc === "function") {
-    const GC_INTERVAL_MS = Number(process.env.GC_INTERVAL_MS ?? 1800000); // 30 min
+    const GC_INTERVAL_MS = Number(process.env.GC_INTERVAL_MS ?? 300000); // 5 min
+    const GC_HEAP_THRESHOLD_MB = Number(process.env.GC_HEAP_THRESHOLD_MB ?? 150);
     if (GC_INTERVAL_MS > 0) {
         setInterval(() => {
-            if (stateMod.State.playing) return; // never stall playback
+            const usedMb = process.memoryUsage().heapUsed / 1048576;
+            if (usedMb < GC_HEAP_THRESHOLD_MB) return; // plenty of headroom
+            const before = usedMb;
             try { global.gc(); } catch { /* best effort */ }
+            const after = process.memoryUsage().heapUsed / 1048576;
+            console.log(`🧹 GC: ${before.toFixed(0)}MB → ${after.toFixed(0)}MB`);
         }, GC_INTERVAL_MS).unref();
     }
 }
