@@ -767,6 +767,21 @@ function currentPositionMs() {
 
 setInterval(() => stateMod.tick(() => ({ position: currentPositionMs() })), 500);
 
+// Periodic heap hygiene. V8 only collects when it feels pressure, so with a
+// 512 MB cap it happily let 400 MB of collectable garbage pile up over a day
+// (measured: heap 52 MB → 394 MB while the live set stayed at 7 MB). The
+// process must survive a year without a restart, so force a collection on a
+// quiet interval — skipped while a track is playing to keep audio glitch-free.
+if (typeof global.gc === "function") {
+    const GC_INTERVAL_MS = Number(process.env.GC_INTERVAL_MS ?? 1800000); // 30 min
+    if (GC_INTERVAL_MS > 0) {
+        setInterval(() => {
+            if (stateMod.State.playing) return; // never stall playback
+            try { global.gc(); } catch { /* best effort */ }
+        }, GC_INTERVAL_MS).unref();
+    }
+}
+
 // Memory watchdog. One compact line per interval makes an OOM diagnosable
 // from the panel console: a rising `ext` points at buffered sockets or
 // native allocations, a rising `heap` points at retained JS objects.

@@ -520,35 +520,38 @@ function buildServer(ctx) {
             const query = String(req.body?.query || "").trim();
             if (!query) return res.status(400).json({ error: "Query required" });
             const requester = req.body?.requester || "Web";
+            // `all: true` is what makes a PLAYLIST return its full track list
+            // (a plain text query still resolves to a single best match inside
+            // `_searchTracks`). Taking only infos[0] here is why pasting a
+            // Spotify playlist link returned just its first song.
             const infos = await searchTracksFn(query, requester, { all: true });
             if (!infos || !infos.length) return res.status(404).json({ error: "No results" });
 
-            // ponytail: the dashboard shows only the single best match (the
-            // user picks one, not a wall of near-duplicates). More important:
-            // searching must NOT write into `tracks`. A song enters the library
-            // only when it is played/queued — see /api/queue/add|play-now, which
-            // upsert the real library row. Serialise the raw Poru track here so
-            // search stays a pure read.
-            const best = infos[0];
-            const info = best.info || best;
-            const t = {
-                id: null,
-                title: info.title || "Unknown",
-                author: info.author || info.artist || "Unknown",
-                duration: info.length ?? info.duration_ms ?? info.duration ?? 0,
-                uri: info.uri || "",
-                thumbnail: info.artworkUrl
-                    || (info.identifier ? `https://i.ytimg.com/vi/${info.identifier}/hqdefault.jpg` : "")
-                    || "",
-                downloaded: false,
-                downloading: false,
-                // Opaque handle so play/queue can resolve the exact track
-                // without re-searching. encode() is Poru's serialised track.
-                encoded: best.track || best.encoded || null,
-                sourceName: info.sourceName || null,
-                identifier: info.identifier || null,
+            // ponytail: searching must NOT write into `tracks`. A song enters the
+            // library only when it is played/queued — /api/queue/from-search
+            // upserts the real row. Serialising raw Poru tracks keeps search a
+            // pure read.
+            const serialise = (item) => {
+                const info = item.info || item;
+                return {
+                    id: null,
+                    title: info.title || "Unknown",
+                    author: info.author || info.artist || "Unknown",
+                    duration: info.length ?? info.duration_ms ?? info.duration ?? 0,
+                    uri: info.uri || "",
+                    thumbnail: info.artworkUrl
+                        || (info.identifier ? `https://i.ytimg.com/vi/${info.identifier}/hqdefault.jpg` : "")
+                        || "",
+                    downloaded: false,
+                    downloading: false,
+                    // Opaque handle so play/queue can resolve the exact track
+                    // without re-searching. encode() is Poru's serialised track.
+                    encoded: item.track || item.encoded || null,
+                    sourceName: info.sourceName || null,
+                    identifier: info.identifier || null,
+                };
             };
-            res.json([t]);
+            res.json(infos.map(serialise));
         } catch (e) {
             console.error("api/search:", e.message);
             res.status(400).json({ error: e.message });

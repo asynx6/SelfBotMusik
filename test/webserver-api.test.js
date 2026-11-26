@@ -159,10 +159,11 @@ function seedLavalinkTrack(identifier, title, extra = {}) {
     });
 }
 
-test("POST /api/search returns ONE best match and never persists a library row", async () => {
+test("POST /api/search returns one match for text and never persists a library row", async () => {
+    // A text query: the resolver already trims to one, so this is what the
+    // dashboard receives.
     searchResults = [
         { track: "enc-vid1", info: { sourceName: "youtube", identifier: "vid1", title: "Search Hit One", author: "A", length: 90000, uri: "u1" } },
-        { track: "enc-vid2", info: { sourceName: "youtube", identifier: "vid2", title: "Search Hit Two", author: "B", length: 80000, uri: "u2" } },
     ];
     const res = await request("POST", "/api/search", { query: "search hits" });
     assert.equal(res.status, 200);
