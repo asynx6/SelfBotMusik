@@ -4,7 +4,7 @@
     "description": "Discord music selfbot with Lavalink + a secure SQLite-backed web dashboard.",
     "main": "index.js",
     "scripts": {
-        "start": "node --max-old-space-size=224 --expose-gc index.js",
+        "start": "node --max-old-space-size=512 --expose-gc index.js",
         "start:supervised": "node scripts/supervise.js",
         "start:plain": "node index.js",
         "dev": "node index.js",

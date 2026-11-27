@@ -95,6 +95,14 @@ function connectLocalVoice(guildId, channelId) {
         localVoiceConnection = conn;
         return conn;
     }
+    // Destroy any stale connection for this guild first. @discordjs/voice keeps
+    // it in a module-level map keyed by guild, so leaving it alive leaked one
+    // connection (plus its stateChange/error listeners) per rejoin — measured
+    // as a heap that grew 196 MB → 203 MB and never came back down.
+    if (conn) {
+        try { conn.removeAllListeners(); } catch {}
+        try { conn.destroy(); } catch {}
+    }
     // The bridge's adapter creator is used instead of guild.voiceAdapterCreator:
     // it delivers the gateway packets in the order @discordjs/voice needs, so
     // the UDP socket actually gets created.
@@ -219,19 +227,50 @@ async function removePoruNode() {
 }
 
 let reconnectAttempts = 0;
-const MAX_RECONNECTS = 5;
+// A 24/7 bot must never give up on staying in its channel. The old cap of 5
+// meant one bad Discord minute (temp-voice churn, shard resume) permanently
+// stranded the bot outside voice — exactly the "keluar DC setelah 1 hari"
+// symptom. Retry forever with capped exponential backoff (max 60 s).
+const MAX_RECONNECTS = Infinity;
+const RECONNECT_BACKOFF_CAP_MS = 60000;
+
+/**
+ * Re-resolve the voice target when the saved channel no longer exists.
+ *
+ * The user's rule: "sekali hubungkan, jangan keluar sampai aku klik Putuskan."
+ * So this NEVER moves the bot to a different channel on its own — it only
+ * reports whether the saved channel still exists. A vanished temp-voice room
+ * means the bot must wait and retry, not wander into someone else's room.
+ *
+ * Returns { channelId } when the saved target is usable, else null.
+ */
+async function resolveVoiceTarget(staleChannelId) {
+    const rt = RuntimeSnapshot();
+    let guild;
+    try {
+        guild = client.guilds?.cache?.get(rt.guildId) || await client.guilds?.fetch?.(rt.guildId);
+    } catch {}
+    if (!guild) return null;
+    try { await guild.channels.fetch(); } catch {}
+
+    // Only the exact saved channel counts. Looking for "some other room" is
+    // what moved the bot out of the channel the user picked.
+    const saved = guild.channels.cache.get(staleChannelId);
+    if (saved && (saved.type === 2 || saved.type === "GUILD_VOICE")) {
+        return { channelId: saved.id };
+    }
+    return null;
+}
+
 async function tryReconnectVC(reason) {
     // `connected` only describes the Lavalink node. Gating rejoin on it made
     // offline/local playback unrecoverable after a voice drop.
     if (!stateMod.State.botReady || intentionalDisconnect) return;
     const target = RuntimeSnapshot();
     if (!target.guildId || !target.channelId) return;
-    if (reconnectAttempts >= MAX_RECONNECTS) {
-        console.warn(`⚠️  Auto-rejoin aborted (${MAX_RECONNECTS} attempts): ${reason}`);
-        return;
-    }
     reconnectAttempts++;
-    console.log(`🔧 Auto-rejoin VC attempt #${reconnectAttempts} (${reason})`);
+    const delay = Math.min(RECONNECT_BACKOFF_CAP_MS, 1000 * Math.pow(2, Math.min(reconnectAttempts - 1, 6)));
+    console.log(`🔧 Auto-rejoin VC attempt #${reconnectAttempts} (${reason})${reconnectAttempts > 5 ? ` — retry dalam ${Math.round(delay / 1000)}s` : ""}`);
     try {
         // Engine-aware rejoin: LocalEngine owns its own voice connection
         // (via @discordjs/voice) — just re-run its connection setup.
@@ -254,10 +293,57 @@ async function tryReconnectVC(reason) {
         console.log("✅ Auto-rejoin successful");
     } catch (e) {
         console.error(`❌ Auto-rejoin #${reconnectAttempts} failed:`, e.message);
-        setTimeout(() => tryReconnectVC(reason), 1000 * Math.pow(2, reconnectAttempts - 1));
+        setTimeout(() => tryReconnectVC(reason), delay);
     }
 }
 function resetReconnects() { reconnectAttempts = 0; }
+
+// Voice-presence watchdog. `voiceStateUpdate` only fires on a *transition*, so
+// a bot that was already gone when the gateway resumed stayed gone forever.
+// This polls the live Discord cache once a minute: if `voice_stay` is on and
+// the bot is not in its channel, it rejoins. That is what makes "stay di
+// channel, jangan keluar-keluar" actually hold for a year of uptime.
+const VOICE_WATCHDOG_MS = Number(process.env.VOICE_WATCHDOG_MS ?? 60000);
+if (VOICE_WATCHDOG_MS > 0) {
+    setInterval(async () => {
+        try {
+            if (!stateMod.State.botReady || intentionalDisconnect) return;
+            if (db.getSetting("voice_stay", "1") === "0") return;
+            const rt = RuntimeSnapshot();
+            if (!rt.guildId || !rt.channelId) return;
+
+            const me = client.user?.id ? client.guilds?.cache?.get(rt.guildId)?.members?.cache?.get(client.user.id) : null;
+            const liveChannel = me?.voice?.channelId || null;
+            if (liveChannel === rt.channelId) return; // already where we belong
+
+            // The saved channel may have been deleted by TempVoice while the bot
+            // was inside (it is the last member). Re-resolve a live target and
+            // persist it, so "stay here forever" keeps working.
+            let targetId = rt.channelId;
+            const guild = client.guilds?.cache?.get(rt.guildId);
+            if (guild && typeof guild.channels?.fetch === "function") {
+                try { await guild.channels.fetch(); } catch {}
+            }
+            const exists = !!guild?.channels?.cache?.has(targetId);
+            if (!exists) {
+                const res = await resolveVoiceTarget(targetId);
+                if (!res) {
+                    // Stay quiet: the room is gone and the user has not picked a
+                    // new one in the dashboard yet. Logging every minute would
+                    // flood a year-long log for no benefit.
+                    return;
+                }
+                targetId = res.channelId;
+            }
+
+            console.warn(`🩺 Voice watchdog: bot di ${liveChannel || "luar VC"}, seharusnya ${targetId} — rejoin`);
+            await joinVC(rt.guildId, targetId);
+            reconnectAttempts = 0;
+        } catch (e) {
+            console.warn("🩺 Voice watchdog gagal:", e.message);
+        }
+    }, VOICE_WATCHDOG_MS).unref();
+}
 
 async function joinVC(guildId, channelId, { lavalinkUp } = {}) {
     if (!guildId || !channelId) {
@@ -266,6 +352,14 @@ async function joinVC(guildId, channelId, { lavalinkUp } = {}) {
     // The saved voice target is the durable intent: stay here across restarts.
     // Only an explicit Leave from the dashboard flips it back off.
     db.setSetting("voice_stay", "1");
+    // Remember the channel NAME too: a TempVoice room is recreated with the
+    // same name but a new id, so the name is what lets the watchdog find its
+    // way back after Discord deletes the room underneath the bot.
+    try {
+        const g = client.guilds?.cache?.get(guildId);
+        const ch = g?.channels?.cache?.get(channelId);
+        if (ch?.name) db.setSetting("channel_name", ch.name);
+    } catch {}
     if (!client.user?.id && client.ws?.status !== 0) {
         await new Promise((res) => client.once("ready", res));
     }
@@ -700,6 +794,24 @@ discordMod.wireSafetyEvents(client, {
     guildId: runtimeMod.Runtime.guildId,
     tryReconnectVC,
     resetReconnects,
+    // The saved voice channel vanished (temp-voice rooms are deleted as soon as
+    // they empty). Pick a live replacement instead of retrying the dead id
+    // forever: prefer a channel the bot can still see, and persist it so the
+    // watchdog and every later boot join the same place.
+    onVoiceChannelDeleted: async (deletedId) => {
+        // TempVoice deleted the room while the bot was in it. Do NOT jump to
+        // another channel — the user picks the channel, and moving on our own
+        // is the "kok pindah-pindah" complaint. Just remember that the saved
+        // target is temporarily gone; the watchdog retries the same id and
+        // rejoins the moment the room exists again.
+        try {
+            console.warn(`🩺 Voice channel ${deletedId} hilang — bot tunggu & rejoin ke channel yang sama`);
+            db.setSetting("channel_id", deletedId);
+            runtimeMod.Runtime.channelId = deletedId;
+        } catch (e) {
+            console.warn("🩺 onVoiceChannelDeleted:", e.message);
+        }
+    },
     // Engine handoffs mark the flag via onIntentionalDisconnect (PlayerController);
     // genuine drops must still trigger auto-rejoin, so the getter stays plain.
     get intentionalDisconnect() { return intentionalDisconnect; },

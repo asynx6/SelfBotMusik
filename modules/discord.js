@@ -66,9 +66,14 @@ function wireSafetyEvents(client, ctx) {
     client.on("channelDelete", (channel) => {
         const current = runtimeMod.Runtime.channelId;
         if (channel.id === current) {
-            console.warn(`⚠️  Voice channel ${channel.name} deleted`);
-            ctx.patch({ voiceConnected: false, lastError: "Voice channel deleted" });
-            ctx.tryReconnectVC("channel deleted");
+            console.warn(`⚠️  Voice channel ${channel.name} (${channel.id}) deleted`);
+            try { ctx.patch({ voiceConnected: false, lastError: "Voice channel deleted" }); } catch {}
+            // Do NOT blindly "reconnect" to the id that just vanished — that
+            // fails 5 times and then leaves the bot with no channel at all.
+            // Ask the caller to re-resolve a live target instead.
+            if (typeof ctx.onVoiceChannelDeleted === "function") {
+                ctx.onVoiceChannelDeleted(channel.id);
+            }
         }
     });
 
